@@ -1,0 +1,27 @@
+/* Tables own their horizontal scroll area; enclosing cards should not create another one. */
+.table-panel,
+.el-card:has(> .el-card__body > .el-table) {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.table-panel {
+  background: #fff;
+  border: 1px solid #e3e8ed;
+}
+
+.el-card:has(> .el-card__body > .el-table) {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.el-card:has(> .el-card__body > .el-table) > .el-card__body {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.table-panel > .el-table {
+  width: 100%;
+}

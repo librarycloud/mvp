@@ -1,0 +1,40 @@
+model DictionaryCategory {
+  id          Int       @id @default(autoincrement()) @db.UnsignedInt
+  code        String    @unique @db.VarChar(64)
+  description String?   @db.VarChar(500)
+  sortOrder   Int       @default(0) @map("sort")
+  enabled     Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt   DateTime? @map("deleted_at") @db.DateTime(3)
+
+  items DictionaryItem[]
+
+  @@index([enabled, sortOrder])
+  @@index([deletedAt])
+  @@map("dictionary_categories")
+}
+
+model DictionaryItem {
+  id         Int       @id @default(autoincrement()) @db.UnsignedInt
+  categoryId Int       @map("category_id") @db.UnsignedInt
+  code       String    @db.VarChar(64)
+  name       String    @db.VarChar(100)
+  value      String    @db.VarChar(255)
+  sortOrder  Int       @default(0) @map("sort")
+  color      String?   @db.VarChar(32)
+  icon       String?   @db.VarChar(100)
+  isDefault  Boolean   @default(false) @map("is_default")
+  enabled    Boolean   @default(true)
+  remark     String?   @db.VarChar(500)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt  DateTime? @map("deleted_at") @db.DateTime(3)
+
+  category DictionaryCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@unique([categoryId, code])
+  @@index([categoryId, enabled, sortOrder])
+  @@index([deletedAt])
+  @@map("dictionary_items")
+}

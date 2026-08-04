@@ -1,0 +1,53 @@
+model AuditLog {
+  id           Int         @id @default(autoincrement()) @db.UnsignedInt
+  actorId      Int?        @map("actor_id") @db.UnsignedInt
+  action       AuditAction
+  resourceType String      @map("resource_type") @db.VarChar(100)
+  resourceId   Int?        @map("resource_id") @db.UnsignedInt
+  description  String?     @db.VarChar(500)
+  beforeData   Json?       @map("before_data")
+  afterData    Json?       @map("after_data")
+  ipAddress    String?     @map("ip_address") @db.VarChar(45)
+  userAgent    String?     @map("user_agent") @db.VarChar(500)
+  requestId    String?     @map("request_id") @db.VarChar(100)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime?   @map("deleted_at") @db.DateTime(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([resourceType, resourceId])
+  @@index([action, createdAt])
+  @@index([requestId])
+  @@index([deletedAt])
+  @@map("audit_logs")
+}
+
+model AccountingEvent {
+  id          Int       @id @default(autoincrement()) @db.UnsignedInt
+  eventType   String    @map("event_type") @db.VarChar(64)
+  sourceType  String?   @map("source_type") @db.VarChar(64)
+  sourceId    Int?      @map("source_id") @db.UnsignedInt
+  voucherId   Int?      @map("voucher_id") @db.UnsignedInt
+  description String?   @db.VarChar(500)
+  createdById Int       @map("created_by") @db.UnsignedInt
+  createdAt   DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt   DateTime? @map("deleted_at") @db.DateTime(3)
+
+  voucher               Voucher?               @relation(fields: [voucherId], references: [id], onDelete: Restrict)
+  createdBy             User                   @relation("AccountingEventCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  fixedAssets           FixedAsset[]
+  depreciations         DepreciationRecord[]
+  receivableSettlements ReceivableSettlement[] @relation("ReceivableSettlementEvent")
+  payableSettlements    PayableSettlement[]    @relation("PayableSettlementEvent")
+  salaries              Salary[]               @relation("SalaryEvent")
+  yearEndClosings       YearEndClosing[]       @relation("YearEndEvent")
+  reimbursements        Reimbursement[]        @relation("ReimbursementEvent")
+
+  @@index([eventType, createdAt])
+  @@index([voucherId])
+  @@index([deletedAt])
+  @@map("accounting_events")
+}

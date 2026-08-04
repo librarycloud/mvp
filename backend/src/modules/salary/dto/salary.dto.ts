@@ -1,0 +1,8 @@
+import { Type } from "@sinclair/typebox";
+export const IdParams = Type.Object({ id: Type.Integer({ minimum: 1 }) });
+export const PeriodParams = Type.Object({ periodId: Type.Integer({ minimum: 1 }) });
+export const EmployeeBody = Type.Object({ employeeNo: Type.String({ minLength: 1, maxLength: 64 }), name: Type.String({ minLength: 1, maxLength: 100 }), idNumber: Type.Optional(Type.String({ maxLength: 32 })), department: Type.Optional(Type.String({ maxLength: 100 })), position: Type.Optional(Type.String({ maxLength: 100 })), bankName: Type.Optional(Type.String({ maxLength: 200 })), bankAccount: Type.Optional(Type.String({ maxLength: 100 })), joinDate: Type.Optional(Type.String({ format: "date" })), baseSalary: Type.String(), socialInsurance: Type.Optional(Type.String()), housingFund: Type.Optional(Type.String()), status: Type.Optional(Type.Integer({ minimum: 0, maximum: 1 })) });
+export const EmployeeUpdateBody = Type.Partial(EmployeeBody);
+export const SalaryItemBody = Type.Object({ code: Type.String({ minLength: 1, maxLength: 64 }), name: Type.String({ minLength: 1, maxLength: 100 }), category: Type.Union([Type.Literal("BONUS"), Type.Literal("ALLOWANCE"), Type.Literal("DEDUCTION"), Type.Literal("SOCIAL_INSURANCE"), Type.Literal("HOUSING_FUND")]), defaultAmount: Type.String(), sortOrder: Type.Optional(Type.Integer({ minimum: 0 })), enabled: Type.Optional(Type.Boolean()), remark: Type.Optional(Type.String({ maxLength: 500 })) });
+export const SalaryItemUpdateBody = Type.Partial(SalaryItemBody);
+export const SalaryGenerateBody = Type.Object({ expenseAccountId: Type.Integer({ minimum: 1 }), payableAccountId: Type.Integer({ minimum: 1 }) });

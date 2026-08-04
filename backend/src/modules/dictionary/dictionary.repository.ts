@@ -1,0 +1,14 @@
+import { Prisma, type PrismaClient } from "../../generated/prisma/client.js";
+import type { DictionaryActor, DictionaryCategoryRecord, DictionaryRepository } from "./dictionary.types.js";
+
+export class PrismaDictionaryRepository implements DictionaryRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+  async listAll(): Promise<DictionaryCategoryRecord[]> { return this.prisma.dictionaryCategory.findMany({ where: { deletedAt: null }, include: { items: { where: { deletedAt: null }, orderBy: [{ sortOrder: "asc" }, { code: "asc" }] } }, orderBy: [{ sortOrder: "asc" }, { code: "asc" }] }); }
+  async findCategory(code: string): Promise<DictionaryCategoryRecord | null> { return this.prisma.dictionaryCategory.findFirst({ where: { code, deletedAt: null }, include: { items: { where: { deletedAt: null }, orderBy: [{ sortOrder: "asc" }, { code: "asc" }] } } }); }
+  createCategory(data: { code: string; description?: string | null; sortOrder?: number; enabled?: boolean }, actor: DictionaryActor) { return this.prisma.$transaction(async tx => { const row = await tx.dictionaryCategory.create({ data }); await tx.auditLog.create({ data: this.audit("CREATE", row.id, "创建数据字典分类", actor) }); return row; }); }
+  updateCategory(id: number, data: { description?: string | null; sortOrder?: number; enabled?: boolean }, actor: DictionaryActor) { return this.prisma.$transaction(async tx => { const row = await tx.dictionaryCategory.update({ where: { id }, data }); await tx.auditLog.create({ data: this.audit("UPDATE", id, "更新数据字典分类", actor) }); return row; }); }
+  createItem(categoryId: number, data: any, actor: DictionaryActor) { return this.prisma.$transaction(async tx => { const row = await tx.dictionaryItem.create({ data: { ...data, categoryId } }); await tx.auditLog.create({ data: this.audit("CREATE", row.id, "创建数据字典项", actor) }); return row; }); }
+  updateItem(id: number, data: any, actor: DictionaryActor) { return this.prisma.$transaction(async tx => { const row = await tx.dictionaryItem.update({ where: { id }, data }); await tx.auditLog.create({ data: this.audit("UPDATE", id, "更新数据字典项", actor) }); return row; }); }
+  async softDeleteItem(id: number, actor: DictionaryActor) { await this.prisma.$transaction(async tx => { await tx.dictionaryItem.update({ where: { id }, data: { deletedAt: new Date(), enabled: false } }); await tx.auditLog.create({ data: this.audit("DELETE", id, "删除数据字典项", actor) }); }); }
+  private audit(action: "CREATE" | "UPDATE" | "DELETE", resourceId: number, description: string, actor: DictionaryActor): Prisma.AuditLogUncheckedCreateInput { return { actorId: actor.actorId, action, resourceType: "Dictionary", resourceId, description, requestId: actor.requestId ?? null, ipAddress: actor.ipAddress ?? null, userAgent: actor.userAgent ?? null }; }
+}

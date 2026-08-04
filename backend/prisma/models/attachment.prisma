@@ -1,0 +1,46 @@
+model Attachment {
+  id           Int       @id @default(autoincrement()) @db.UnsignedInt
+  fileName     String    @map("file_name") @db.VarChar(255)
+  originalName String    @map("original_name") @db.VarChar(255)
+  extension    String    @db.VarChar(20)
+  mimeType     String    @map("mime_type") @db.VarChar(100)
+  size         BigInt    @db.UnsignedBigInt
+  sha256       String    @unique @db.Char(64)
+  storagePath  String    @map("storage_path") @db.VarChar(500)
+  previewPath  String?   @map("preview_path") @db.VarChar(500)
+  category     String?   @db.VarChar(64)
+  uploadedById Int       @map("uploaded_by") @db.UnsignedInt
+  uploadedAt   DateTime  @default(now()) @map("uploaded_at") @db.DateTime(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime? @map("deleted_at") @db.DateTime(3)
+
+  uploadedBy User                 @relation("AttachmentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  relations  AttachmentRelation[]
+
+  @@index([uploadedById, uploadedAt])
+  @@index([deletedAt])
+  @@map("attachments")
+}
+
+model AttachmentRelation {
+  id           Int       @id @default(autoincrement()) @db.UnsignedInt
+  attachmentId Int       @map("attachment_id") @db.UnsignedInt
+  sourceType   String    @map("source_type") @db.VarChar(64)
+  sourceId     Int       @map("source_id") @db.UnsignedInt
+  relationType String    @map("relation_type") @db.VarChar(32)
+  remark       String?   @db.VarChar(500)
+  createdById  Int       @map("created_by") @db.UnsignedInt
+  createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime? @map("deleted_at") @db.DateTime(3)
+
+  attachment Attachment @relation(fields: [attachmentId], references: [id], onDelete: Restrict)
+  createdBy  User       @relation("AttachmentRelationCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([attachmentId, sourceType, sourceId, relationType], map: "attachment_relations_uniq")
+  @@index([sourceType, sourceId, deletedAt])
+  @@index([attachmentId, deletedAt])
+  @@index([createdById])
+  @@map("attachment_relations")
+}

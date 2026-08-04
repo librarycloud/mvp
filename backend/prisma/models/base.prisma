@@ -1,0 +1,140 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum UserRole {
+  ADMIN
+  FINANCE_MANAGER
+  ACCOUNTANT
+  CASHIER
+}
+
+enum CompanyOperationMode {
+  SIMPLE
+  STANDARD
+}
+
+enum AccountCategory {
+  ASSET
+  LIABILITY
+  COMMON
+  EQUITY
+  COST
+  PROFIT_AND_LOSS
+}
+
+enum BalanceDirection {
+  DEBIT
+  CREDIT
+}
+
+enum ImportType {
+  BANK_XLSX
+  BANK_CSV
+  BANK_JSON
+  INVOICE_XML
+  INVOICE_OFD
+  INVOICE_PDF
+}
+
+enum InvoiceFormat {
+  XML
+  OFD
+  PDF
+}
+
+enum InvoiceVerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  MANUAL_CONFIRMED
+}
+
+enum TaxDeclarationType {
+  VAT
+  SURCHARGE
+  CORPORATE_INCOME
+}
+
+enum TaxDeclarationStatus {
+  DRAFT
+  REVIEWED
+  DECLARED
+  PAID
+}
+
+enum InvoiceType {
+  SPECIAL
+  ORDINARY
+  UNKNOWN
+}
+
+enum DocumentDirection {
+  PURCHASE
+  SALE
+  UNKNOWN
+}
+
+enum VoucherSourceType {
+  BANK_TRANSACTION
+  INVOICE
+  MIXED
+  MANUAL
+}
+
+enum VoucherCategory {
+  RECEIPT
+  PAYMENT
+  TRANSFER
+  ACCRUAL
+  CLOSING
+  OTHER
+}
+
+enum ReportType {
+  BALANCE_SHEET
+  INCOME_STATEMENT
+  CASH_FLOW_STATEMENT
+  EQUITY_CHANGE_STATEMENT
+  CUSTOM
+}
+
+enum ReportPeriodType {
+  MONTH
+  QUARTER
+  YEAR
+}
+
+enum ReportValueType {
+  OPENING_BALANCE
+  CLOSING_BALANCE
+  PERIOD_DEBIT
+  PERIOD_CREDIT
+  PERIOD_NET
+  YEAR_TO_DATE_DEBIT
+  YEAR_TO_DATE_CREDIT
+  YEAR_TO_DATE_NET
+  CASH_INFLOW
+  CASH_OUTFLOW
+}
+
+enum FormulaOperator {
+  ADD
+  SUBTRACT
+}
+
+enum AuditAction {
+  LOGIN
+  IMPORT
+  CREATE
+  UPDATE
+  DELETE
+  REVIEW
+  UNREVIEW
+  EXPORT
+}

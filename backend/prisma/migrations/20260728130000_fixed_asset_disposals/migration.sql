@@ -1,0 +1,23 @@
+CREATE TABLE `fixed_asset_disposals` (
+  `id` INTEGER UNSIGNED NOT NULL AUTO_INCREMENT,
+  `asset_id` INTEGER UNSIGNED NOT NULL,
+  `disposal_type` VARCHAR(16) NOT NULL,
+  `disposal_date` DATE NOT NULL,
+  `proceeds` DECIMAL(19,4) NOT NULL DEFAULT 0,
+  `accumulated_depreciation` DECIMAL(19,4) NOT NULL,
+  `net_book_value` DECIMAL(19,4) NOT NULL,
+  `gain_loss` DECIMAL(19,4) NOT NULL,
+  `reason` VARCHAR(500) NULL,
+  `voucher_id` INTEGER UNSIGNED NULL,
+  `created_by` INTEGER UNSIGNED NOT NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL,
+  `deleted_at` DATETIME(3) NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `fixed_asset_disposals_voucher_id_key` (`voucher_id`),
+  KEY `fixed_asset_disposals_asset_id_deleted_at_idx` (`asset_id`,`deleted_at`),
+  KEY `fixed_asset_disposals_disposal_date_idx` (`disposal_date`),
+  CONSTRAINT `fixed_asset_disposals_asset_id_fkey` FOREIGN KEY (`asset_id`) REFERENCES `fixed_assets` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `fixed_asset_disposals_voucher_id_fkey` FOREIGN KEY (`voucher_id`) REFERENCES `vouchers` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `fixed_asset_disposals_created_by_fkey` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

@@ -1,0 +1,50 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from "vue";
+import { api } from "../utils/api";
+
+const loading = ref(false);
+const rows = ref<any[]>([]);
+const total = ref(0);
+const page = ref(1);
+const pageSize = ref(50);
+const action = ref("");
+const resourceType = ref("");
+const requestId = ref("");
+const detail = ref<any>();
+const visible = ref(false);
+const actions = ["LOGIN", "IMPORT", "CREATE", "UPDATE", "DELETE", "REVIEW", "UNREVIEW", "EXPORT"];
+const query = computed(() => {
+  const value = new URLSearchParams({ page: String(page.value), pageSize: String(pageSize.value) });
+  if (action.value) value.set("action", action.value);
+  if (resourceType.value.trim()) value.set("resourceType", resourceType.value.trim());
+  if (requestId.value.trim()) value.set("requestId", requestId.value.trim());
+  return value;
+});
+
+async function load(reset = false) {
+  if (reset) page.value = 1;
+  loading.value = true;
+  try {
+    const result = await api.get<any>(`/audits?${query.value}`);
+    rows.value = result.items; total.value = result.total;
+  } finally { loading.value = false; }
+}
+function inspect(row: any) { detail.value = row; visible.value = true; }
+function json(value: unknown) { return value ? JSON.stringify(value, null, 2) : "-"; }
+function download() { return api.download(`/audits/export.csv?${query.value}`, "audit-logs.csv"); }
+onMounted(load);
+</script>
+
+<template>
+  <div class="page-grid">
+    <section class="page-heading"><div><h2>审计中心</h2><p>查看关键业务操作、数据变更与请求链路。</p></div><el-button @click="download">导出 CSV</el-button></section>
+    <el-card shadow="never"><div class="toolbar"><el-select v-model="action" clearable placeholder="全部动作" style="width:150px" @change="load(true)"><el-option v-for="item in actions" :key="item" :label="item" :value="item"/></el-select><el-input v-model="resourceType" clearable placeholder="业务对象，如 Invoice" style="width:190px" @keyup.enter="load(true)"/><el-input v-model="requestId" clearable placeholder="请求编号" style="width:190px" @keyup.enter="load(true)"/><el-button type="primary" @click="load(true)">查询</el-button></div></el-card>
+    <el-card shadow="never"><el-table v-loading="loading" :data="rows" stripe @row-dblclick="inspect"><el-table-column label="时间" width="180"><template #default="{row}">{{new Date(row.createdAt).toLocaleString()}}</template></el-table-column><el-table-column label="人员" min-width="120"><template #default="{row}">{{row.actor?.displayName ?? row.actor?.username ?? '系统'}}</template></el-table-column><el-table-column prop="action" label="动作" width="100"/><el-table-column prop="resourceType" label="对象" min-width="150"/><el-table-column prop="resourceId" label="编号" width="85"/><el-table-column prop="description" label="说明" min-width="220" show-overflow-tooltip/><el-table-column label="详情" width="80"><template #default="{row}"><el-button link type="primary" @click="inspect(row)">查看</el-button></template></el-table-column></el-table><div class="pagination"><el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" layout="total, sizes, prev, pager, next" @change="load()"/></div></el-card>
+    <el-drawer v-model="visible" title="审计详情" size="620px"><template v-if="detail"><el-descriptions :column="1" border><el-descriptions-item label="时间">{{new Date(detail.createdAt).toLocaleString()}}</el-descriptions-item><el-descriptions-item label="操作人">{{detail.actor?.displayName ?? detail.actor?.username ?? '系统'}}</el-descriptions-item><el-descriptions-item label="对象">{{detail.resourceType}} #{{detail.resourceId ?? '-'}}</el-descriptions-item><el-descriptions-item label="动作">{{detail.action}}</el-descriptions-item><el-descriptions-item label="请求编号">{{detail.requestId ?? '-'}}</el-descriptions-item><el-descriptions-item label="IP">{{detail.ipAddress ?? '-'}}</el-descriptions-item><el-descriptions-item label="说明">{{detail.description ?? '-'}}</el-descriptions-item></el-descriptions><h3>变更前</h3><pre>{{json(detail.beforeData)}}</pre><h3>变更后</h3><pre>{{json(detail.afterData)}}</pre></template></el-drawer>
+  </div>
+</template>
+
+<style scoped>
+.pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
+pre { max-height: 280px; overflow: auto; padding: 12px; background: var(--el-fill-color-light); white-space: pre-wrap; word-break: break-word; }
+</style>

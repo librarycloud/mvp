@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+.vite/
+outputs/
+
+# Local financial workbooks (application templates under backend/assets stay tracked)
+/*.xlsx
+
+# Local environment and databases
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+/backend/data/
+
+# Logs and editor files
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local Codex working artifacts
+.codex-sheet/
+.agents/

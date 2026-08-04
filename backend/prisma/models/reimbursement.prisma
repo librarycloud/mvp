@@ -1,0 +1,54 @@
+model Reimbursement {
+  id                  Int       @id @default(autoincrement()) @db.UnsignedInt
+  reimbursementNo     String    @unique @map("reimbursement_no") @db.VarChar(64)
+  applicantName       String    @map("applicant_name") @db.VarChar(100)
+  department          String?   @db.VarChar(100)
+  expenseDate         DateTime  @map("expense_date") @db.Date
+  expenseType         String    @map("expense_type") @db.VarChar(100)
+  amount              Decimal   @db.Decimal(19, 4)
+  currency            String    @default("CNY") @db.Char(3)
+  description         String?   @db.VarChar(500)
+  evidenceType        Int       @default(0) @map("evidence_type") @db.UnsignedTinyInt
+  evidenceDescription String?   @map("evidence_description") @db.VarChar(500)
+  status              Int       @default(0) @db.UnsignedTinyInt
+  expenseAccountId    Int?      @map("expense_account_id") @db.UnsignedInt
+  paymentAccountId    Int?      @map("payment_account_id") @db.UnsignedInt
+  inputTaxAccountId   Int?      @map("input_tax_account_id") @db.UnsignedInt
+  paidAt              DateTime? @map("paid_at") @db.DateTime(3)
+  approvedAt          DateTime? @map("approved_at") @db.DateTime(3)
+  rejectedAt          DateTime? @map("rejected_at") @db.DateTime(3)
+  rejectReason        String?   @map("reject_reason") @db.VarChar(500)
+  voucherId           Int?      @unique @map("voucher_id") @db.UnsignedInt
+  eventId             Int?      @unique @map("event_id") @db.UnsignedInt
+  bankTransactionId   Int?      @unique @map("bank_transaction_id") @db.UnsignedInt
+  createdById         Int       @map("created_by") @db.UnsignedInt
+  approvedById        Int?      @map("approved_by") @db.UnsignedInt
+  rejectedById        Int?      @map("rejected_by") @db.UnsignedInt
+  paidById            Int?      @map("paid_by") @db.UnsignedInt
+  createdAt           DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt           DateTime? @map("deleted_at") @db.DateTime(3)
+
+  expenseAccount    Account?           @relation("ReimbursementExpenseAccount", fields: [expenseAccountId], references: [id], onDelete: Restrict)
+  paymentAccount    Account?           @relation("ReimbursementPaymentAccount", fields: [paymentAccountId], references: [id], onDelete: Restrict)
+  inputTaxAccount   Account?           @relation("ReimbursementInputTaxAccount", fields: [inputTaxAccountId], references: [id], onDelete: Restrict)
+  voucher           Voucher?           @relation("ReimbursementVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
+  event             AccountingEvent?   @relation("ReimbursementEvent", fields: [eventId], references: [id], onDelete: Restrict)
+  bankTransaction   BankTransaction?   @relation("ReimbursementPaymentBank", fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  budgetReservation BudgetReservation?
+  createdBy         User               @relation("ReimbursementCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy        User?              @relation("ReimbursementApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  rejectedBy        User?              @relation("ReimbursementRejecter", fields: [rejectedById], references: [id], onDelete: Restrict)
+  paidBy            User?              @relation("ReimbursementPayer", fields: [paidById], references: [id], onDelete: Restrict)
+  invoices          Invoice[]
+
+  @@index([status, expenseDate])
+  @@index([applicantName, expenseDate])
+  @@index([expenseAccountId])
+  @@index([paymentAccountId])
+  @@index([inputTaxAccountId])
+  @@index([bankTransactionId])
+  @@index([createdById, createdAt])
+  @@index([deletedAt])
+  @@map("reimbursements")
+}

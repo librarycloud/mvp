@@ -1,0 +1,63 @@
+model AccountingDimension {
+  id                Int                         @id @default(autoincrement()) @db.UnsignedInt
+  code              String                      @unique @db.VarChar(64)
+  name              String                      @db.VarChar(100)
+  enabled           Boolean                     @default(true)
+  createdAt         DateTime                    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime                    @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt         DateTime?                   @map("deleted_at") @db.DateTime(3)
+  members           AccountingDimensionMember[]
+  accountRules      AccountDimensionRule[]
+  voucherDimensions VoucherEntryDimension[]
+
+  @@index([deletedAt])
+  @@map("accounting_dimensions")
+}
+
+model AccountingDimensionMember {
+  id                Int                     @id @default(autoincrement()) @db.UnsignedInt
+  dimensionId       Int                     @map("dimension_id") @db.UnsignedInt
+  code              String                  @db.VarChar(64)
+  name              String                  @db.VarChar(100)
+  enabled           Boolean                 @default(true)
+  createdAt         DateTime                @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime                @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt         DateTime?               @map("deleted_at") @db.DateTime(3)
+  dimension         AccountingDimension     @relation(fields: [dimensionId], references: [id], onDelete: Restrict)
+  voucherDimensions VoucherEntryDimension[]
+
+  @@unique([dimensionId, code])
+  @@index([dimensionId, enabled])
+  @@index([deletedAt])
+  @@map("accounting_dimension_members")
+}
+
+model AccountDimensionRule {
+  id          Int                 @id @default(autoincrement()) @db.UnsignedInt
+  accountId   Int                 @map("account_id") @db.UnsignedInt
+  dimensionId Int                 @map("dimension_id") @db.UnsignedInt
+  required    Boolean             @default(true)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
+  account     Account             @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  dimension   AccountingDimension @relation(fields: [dimensionId], references: [id], onDelete: Restrict)
+
+  @@unique([accountId, dimensionId])
+  @@index([dimensionId])
+  @@map("account_dimension_rules")
+}
+
+model VoucherEntryDimension {
+  id                Int                       @id @default(autoincrement()) @db.UnsignedInt
+  voucherEntryId    Int                       @map("voucher_entry_id") @db.UnsignedInt
+  dimensionId       Int                       @map("dimension_id") @db.UnsignedInt
+  dimensionMemberId Int                       @map("dimension_member_id") @db.UnsignedInt
+  createdAt         DateTime                  @default(now()) @map("created_at") @db.DateTime(3)
+  voucherEntry      VoucherEntry              @relation(fields: [voucherEntryId], references: [id], onDelete: Restrict)
+  dimension         AccountingDimension       @relation(fields: [dimensionId], references: [id], onDelete: Restrict)
+  dimensionMember   AccountingDimensionMember @relation(fields: [dimensionMemberId], references: [id], onDelete: Restrict)
+
+  @@unique([voucherEntryId, dimensionId])
+  @@index([dimensionMemberId])
+  @@map("voucher_entry_dimensions")
+}

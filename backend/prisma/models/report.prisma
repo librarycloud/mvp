@@ -1,0 +1,138 @@
+model ReportTemplate {
+  id             Int        @id @default(autoincrement()) @db.UnsignedInt
+  code           String     @db.VarChar(64)
+  name           String     @db.VarChar(200)
+  type           ReportType
+  version        Int        @default(1) @db.UnsignedSmallInt
+  isActive       Boolean    @default(true) @map("is_active")
+  effectiveFrom  DateTime?  @map("effective_from") @db.Date
+  effectiveTo    DateTime?  @map("effective_to") @db.Date
+  description    String?    @db.VarChar(500)
+  maintainedById Int?       @map("maintained_by_id") @db.UnsignedInt
+  createdAt      DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt      DateTime?  @map("deleted_at") @db.DateTime(3)
+
+  maintainedBy User?        @relation("TemplateMaintainer", fields: [maintainedById], references: [id], onDelete: SetNull)
+  items        ReportItem[]
+  reports      Report[]
+
+  @@unique([code, version])
+  @@index([type, isActive])
+  @@index([deletedAt])
+  @@map("report_templates")
+}
+
+model ReportItem {
+  id              Int               @id @default(autoincrement()) @db.UnsignedInt
+  templateId      Int               @map("template_id") @db.UnsignedInt
+  itemCode        String            @map("item_code") @db.VarChar(64)
+  name            String            @db.VarChar(200)
+  lineNumber      Int?              @map("line_number") @db.UnsignedSmallInt
+  sortOrder       Int               @map("sort_order")
+  normalDirection BalanceDirection? @map("normal_direction")
+  valueType       ReportValueType?  @map("value_type")
+  formula         String?           @db.VarChar(1000)
+  isSubtotal      Boolean           @default(false) @map("is_subtotal")
+  displayLevel    Int               @default(1) @map("display_level") @db.UnsignedTinyInt
+  createdAt       DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt       DateTime?         @map("deleted_at") @db.DateTime(3)
+
+  template             ReportTemplate             @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  accountMappings      ReportItemAccountMapping[]
+  dependenciesAsTarget ReportFormulaDependency[]  @relation("FormulaTarget")
+  dependenciesAsSource ReportFormulaDependency[]  @relation("FormulaSource")
+  reportLines          ReportLine[]
+
+  @@unique([templateId, itemCode])
+  @@unique([templateId, sortOrder])
+  @@index([deletedAt])
+  @@map("report_items")
+}
+
+model ReportItemAccountMapping {
+  id              Int               @id @default(autoincrement()) @db.UnsignedInt
+  reportItemId    Int               @map("report_item_id") @db.UnsignedInt
+  accountId       Int               @map("account_id") @db.UnsignedInt
+  operator        FormulaOperator   @default(ADD)
+  valueType       ReportValueType   @map("value_type")
+  direction       BalanceDirection?
+  includeChildren Boolean           @default(true) @map("include_children")
+  createdAt       DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt       DateTime?         @map("deleted_at") @db.DateTime(3)
+
+  reportItem ReportItem @relation(fields: [reportItemId], references: [id], onDelete: Restrict)
+  account    Account    @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@unique([reportItemId, accountId, valueType])
+  @@index([accountId])
+  @@index([deletedAt])
+  @@map("report_item_account_mappings")
+}
+
+model ReportFormulaDependency {
+  id           Int             @id @default(autoincrement()) @db.UnsignedInt
+  targetItemId Int             @map("target_item_id") @db.UnsignedInt
+  sourceItemId Int             @map("source_item_id") @db.UnsignedInt
+  operator     FormulaOperator @default(ADD)
+  coefficient  Decimal         @default(1) @db.Decimal(19, 6)
+  sortOrder    Int             @default(0) @map("sort_order")
+  createdAt    DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime?       @map("deleted_at") @db.DateTime(3)
+
+  targetItem ReportItem @relation("FormulaTarget", fields: [targetItemId], references: [id], onDelete: Restrict)
+  sourceItem ReportItem @relation("FormulaSource", fields: [sourceItemId], references: [id], onDelete: Restrict)
+
+  @@unique([targetItemId, sourceItemId])
+  @@index([sourceItemId])
+  @@index([deletedAt])
+  @@map("report_formula_dependencies")
+}
+
+model Report {
+  id            Int              @id @default(autoincrement()) @db.UnsignedInt
+  templateId    Int              @map("template_id") @db.UnsignedInt
+  periodType    ReportPeriodType @map("period_type")
+  fiscalYear    Int              @map("fiscal_year") @db.UnsignedSmallInt
+  periodStart   DateTime         @map("period_start") @db.Date
+  periodEnd     DateTime         @map("period_end") @db.Date
+  status        Int              @default(0) @db.UnsignedTinyInt
+  generatedById Int              @map("generated_by_id") @db.UnsignedInt
+  generatedAt   DateTime         @default(now()) @map("generated_at") @db.DateTime(3)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt     DateTime?        @map("deleted_at") @db.DateTime(3)
+
+  template    ReportTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  generatedBy User           @relation(fields: [generatedById], references: [id], onDelete: Restrict)
+  lines       ReportLine[]
+
+  @@unique([templateId, periodType, periodStart, periodEnd])
+  @@index([fiscalYear, periodType])
+  @@index([generatedById])
+  @@index([deletedAt])
+  @@map("reports")
+}
+
+model ReportLine {
+  id               Int       @id @default(autoincrement()) @db.UnsignedInt
+  reportId         Int       @map("report_id") @db.UnsignedInt
+  reportItemId     Int       @map("report_item_id") @db.UnsignedInt
+  openingAmount    Decimal?  @map("opening_amount") @db.Decimal(19, 4)
+  currentAmount    Decimal?  @map("current_amount") @db.Decimal(19, 4)
+  closingAmount    Decimal?  @map("closing_amount") @db.Decimal(19, 4)
+  calculationTrace Json?     @map("calculation_trace")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt        DateTime? @map("deleted_at") @db.DateTime(3)
+
+  report     Report     @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  reportItem ReportItem @relation(fields: [reportItemId], references: [id], onDelete: Restrict)
+
+  @@unique([reportId, reportItemId])
+  @@index([deletedAt])
+  @@map("report_lines")
+}

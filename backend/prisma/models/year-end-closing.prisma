@@ -1,0 +1,22 @@
+model YearEndClosing {
+  id            Int             @id @default(autoincrement()) @db.UnsignedInt
+  fiscalYear    Int             @unique @map("fiscal_year") @db.UnsignedSmallInt
+  status        Int             @default(2) @db.UnsignedTinyInt
+  revenueAmount Decimal         @map("revenue_amount") @db.Decimal(19, 4)
+  costAmount    Decimal         @map("cost_amount") @db.Decimal(19, 4)
+  expenseAmount Decimal         @map("expense_amount") @db.Decimal(19, 4)
+  netProfit     Decimal         @map("net_profit") @db.Decimal(19, 4)
+  eventId       Int             @unique @map("event_id") @db.UnsignedInt
+  voucherId     Int             @unique @map("voucher_id") @db.UnsignedInt
+  reportData    Json?           @map("report_data")
+  createdById   Int             @map("created_by") @db.UnsignedInt
+  createdAt     DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt     DateTime?       @map("deleted_at") @db.DateTime(3)
+  event         AccountingEvent @relation("YearEndEvent", fields: [eventId], references: [id], onDelete: Restrict)
+  voucher       Voucher         @relation("YearEndVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
+  createdBy     User            @relation("YearEndCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([status, deletedAt])
+  @@map("year_end_closings")
+}

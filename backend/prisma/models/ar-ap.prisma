@@ -1,0 +1,176 @@
+model Customer {
+  id          Int            @id @default(autoincrement()) @db.UnsignedInt
+  code        String         @unique @db.VarChar(64)
+  name        String         @db.VarChar(200)
+  taxId       String?        @map("tax_id") @db.VarChar(64)
+  contact     String?        @db.VarChar(100)
+  phone       String?        @db.VarChar(50)
+  address     String?        @db.VarChar(500)
+  remark      String?        @db.VarChar(500)
+  creditLimit Decimal        @default(0) @map("credit_limit") @db.Decimal(19, 4)
+  enabled     Boolean        @default(true)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt   DateTime?      @map("deleted_at") @db.DateTime(3)
+  receivables Receivable[]
+  followUps   ArApFollowUp[]
+
+  @@index([deletedAt])
+  @@map("customers")
+}
+
+model Supplier {
+  id          Int            @id @default(autoincrement()) @db.UnsignedInt
+  code        String         @unique @db.VarChar(64)
+  name        String         @db.VarChar(200)
+  taxId       String?        @map("tax_id") @db.VarChar(64)
+  contact     String?        @db.VarChar(100)
+  phone       String?        @db.VarChar(50)
+  address     String?        @db.VarChar(500)
+  remark      String?        @db.VarChar(500)
+  creditLimit Decimal        @default(0) @map("credit_limit") @db.Decimal(19, 4)
+  enabled     Boolean        @default(true)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt   DateTime?      @map("deleted_at") @db.DateTime(3)
+  payables    Payable[]
+  followUps   ArApFollowUp[]
+
+  @@index([deletedAt])
+  @@map("suppliers")
+}
+
+model Receivable {
+  id             Int                    @id @default(autoincrement()) @db.UnsignedInt
+  customerId     Int                    @map("customer_id") @db.UnsignedInt
+  documentNo     String                 @map("document_no") @db.VarChar(64)
+  occurrenceDate DateTime               @map("occurrence_date") @db.Date
+  dueDate        DateTime?              @map("due_date") @db.Date
+  amount         Decimal                @db.Decimal(19, 4)
+  settledAmount  Decimal                @default(0) @map("settled_amount") @db.Decimal(19, 4)
+  currency       String                 @default("CNY") @db.Char(3)
+  status         Int                    @default(0) @db.UnsignedTinyInt
+  description    String?                @db.VarChar(500)
+  createdById    Int                    @map("created_by") @db.UnsignedInt
+  createdAt      DateTime               @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime               @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt      DateTime?              @map("deleted_at") @db.DateTime(3)
+  customer       Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy      User                   @relation("ReceivableCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  settlements    ReceivableSettlement[]
+
+  @@unique([customerId, documentNo])
+  @@index([customerId, status])
+  @@index([dueDate, status])
+  @@index([deletedAt])
+  @@map("receivables")
+}
+
+model Payable {
+  id             Int                 @id @default(autoincrement()) @db.UnsignedInt
+  supplierId     Int                 @map("supplier_id") @db.UnsignedInt
+  documentNo     String              @map("document_no") @db.VarChar(64)
+  occurrenceDate DateTime            @map("occurrence_date") @db.Date
+  dueDate        DateTime?           @map("due_date") @db.Date
+  amount         Decimal             @db.Decimal(19, 4)
+  settledAmount  Decimal             @default(0) @map("settled_amount") @db.Decimal(19, 4)
+  currency       String              @default("CNY") @db.Char(3)
+  status         Int                 @default(0) @db.UnsignedTinyInt
+  description    String?             @db.VarChar(500)
+  createdById    Int                 @map("created_by") @db.UnsignedInt
+  createdAt      DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt      DateTime?           @map("deleted_at") @db.DateTime(3)
+  supplier       Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy      User                @relation("PayableCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  settlements    PayableSettlement[]
+
+  @@unique([supplierId, documentNo])
+  @@index([supplierId, status])
+  @@index([dueDate, status])
+  @@index([deletedAt])
+  @@map("payables")
+}
+
+model ReceivableSettlement {
+  id                Int              @id @default(autoincrement()) @db.UnsignedInt
+  receiptNo         String           @unique @map("receipt_no") @db.VarChar(64)
+  receivableId      Int              @map("receivable_id") @db.UnsignedInt
+  bankTransactionId Int?             @unique @map("bank_transaction_id") @db.UnsignedInt
+  paymentDate       DateTime         @map("payment_date") @db.Date
+  amount            Decimal          @db.Decimal(19, 4)
+  status            Int              @default(2) @db.UnsignedTinyInt
+  remark            String?          @db.VarChar(500)
+  eventId           Int              @unique @map("event_id") @db.UnsignedInt
+  voucherId         Int              @unique @map("voucher_id") @db.UnsignedInt
+  createdById       Int              @map("created_by") @db.UnsignedInt
+  createdAt         DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime         @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt         DateTime?        @map("deleted_at") @db.DateTime(3)
+  receivable        Receivable       @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+  bankTransaction   BankTransaction? @relation("ReceivableSettlementBank", fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  event             AccountingEvent  @relation("ReceivableSettlementEvent", fields: [eventId], references: [id], onDelete: Restrict)
+  voucher           Voucher          @relation("ReceivableSettlementVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
+  createdBy         User             @relation("ReceivableSettlementCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([receivableId, status])
+  @@index([paymentDate])
+  @@index([deletedAt])
+  @@map("receivable_settlements")
+}
+
+model PayableSettlement {
+  id                Int              @id @default(autoincrement()) @db.UnsignedInt
+  paymentNo         String           @unique @map("payment_no") @db.VarChar(64)
+  payableId         Int              @map("payable_id") @db.UnsignedInt
+  bankTransactionId Int?             @unique @map("bank_transaction_id") @db.UnsignedInt
+  paymentDate       DateTime         @map("payment_date") @db.Date
+  amount            Decimal          @db.Decimal(19, 4)
+  status            Int              @default(2) @db.UnsignedTinyInt
+  remark            String?          @db.VarChar(500)
+  eventId           Int              @unique @map("event_id") @db.UnsignedInt
+  voucherId         Int              @unique @map("voucher_id") @db.UnsignedInt
+  createdById       Int              @map("created_by") @db.UnsignedInt
+  createdAt         DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime         @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt         DateTime?        @map("deleted_at") @db.DateTime(3)
+  payable           Payable          @relation(fields: [payableId], references: [id], onDelete: Restrict)
+  bankTransaction   BankTransaction? @relation("PayableSettlementBank", fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  event             AccountingEvent  @relation("PayableSettlementEvent", fields: [eventId], references: [id], onDelete: Restrict)
+  voucher           Voucher          @relation("PayableSettlementVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
+  createdBy         User             @relation("PayableSettlementCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([payableId, status])
+  @@index([paymentDate])
+  @@index([deletedAt])
+  @@map("payable_settlements")
+}
+
+model ArApFollowUp {
+  id            Int       @id @default(autoincrement()) @db.UnsignedInt
+  customerId    Int?      @map("customer_id") @db.UnsignedInt
+  supplierId    Int?      @map("supplier_id") @db.UnsignedInt
+  sourceType    String?   @map("source_type") @db.VarChar(32)
+  sourceId      Int?      @map("source_id") @db.UnsignedInt
+  scheduledDate DateTime  @map("scheduled_date") @db.Date
+  content       String    @db.VarChar(500)
+  result        String?   @db.VarChar(500)
+  status        Int       @default(0) @db.UnsignedTinyInt
+  createdById   Int       @map("created_by_id") @db.UnsignedInt
+  completedById Int?      @map("completed_by_id") @db.UnsignedInt
+  completedAt   DateTime? @map("completed_at") @db.DateTime(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt     DateTime? @map("deleted_at") @db.DateTime(3)
+  customer      Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  supplier      Supplier? @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy     User      @relation("ArApFollowUpCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy   User?     @relation("ArApFollowUpCompleter", fields: [completedById], references: [id], onDelete: Restrict)
+
+  @@index([scheduledDate, status])
+  @@index([customerId, status])
+  @@index([supplierId, status])
+  @@index([sourceType, sourceId])
+  @@index([deletedAt])
+  @@map("ar_ap_follow_ups")
+}

@@ -1,0 +1,200 @@
+model ImportBatch {
+  id           Int        @id @default(autoincrement()) @db.UnsignedInt
+  type         ImportType
+  status       Int        @default(0) @db.UnsignedTinyInt
+  originalName String     @map("original_name") @db.VarChar(255)
+  storagePath  String     @map("storage_path") @db.VarChar(500)
+  fileHash     String     @map("file_hash") @db.Char(64)
+  totalCount   Int        @default(0) @map("total_count")
+  successCount Int        @default(0) @map("success_count")
+  skippedCount Int        @default(0) @map("skipped_count")
+  failedCount  Int        @default(0) @map("failed_count")
+  errorSummary Json?      @map("error_summary")
+  importedById Int        @map("imported_by_id") @db.UnsignedInt
+  createdAt    DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime?  @map("deleted_at") @db.DateTime(3)
+
+  importedBy       User              @relation(fields: [importedById], references: [id], onDelete: Restrict)
+  bankTransactions BankTransaction[]
+  invoices         Invoice[]
+
+  @@index([fileHash])
+  @@index([importedById, createdAt])
+  @@index([deletedAt])
+  @@map("import_batches")
+}
+
+model BankTransaction {
+  id                      Int       @id @default(autoincrement()) @db.UnsignedInt
+  importBatchId           Int       @map("import_batch_id") @db.UnsignedInt
+  payerAccount            String?   @map("payer_account") @db.VarChar(100)
+  payerName               String?   @map("payer_name") @db.VarChar(200)
+  payerBank               String?   @map("payer_bank") @db.VarChar(200)
+  payerCurrency           String?   @map("payer_currency") @db.Char(3)
+  payeeAccount            String?   @map("payee_account") @db.VarChar(100)
+  payeeName               String?   @map("payee_name") @db.VarChar(200)
+  payeeBank               String?   @map("payee_bank") @db.VarChar(200)
+  payeeCurrency           String?   @map("payee_currency") @db.Char(3)
+  amount                  Decimal   @db.Decimal(19, 4)
+  balance                 Decimal?  @db.Decimal(19, 4)
+  transactionTime         DateTime  @map("transaction_time") @db.DateTime(3)
+  transactionDate         DateTime  @map("transaction_date") @db.Date
+  importTime              DateTime  @default(now()) @map("import_time") @db.DateTime(3)
+  voucherId               Int?      @map("voucher_id") @db.UnsignedInt
+  transactionNo           String    @unique @map("transaction_no") @db.VarChar(128)
+  transactionType         String?   @map("transaction_type") @db.VarChar(100)
+  summary                 String?   @db.VarChar(500)
+  rawData                 Json?     @map("raw_data")
+  reconciliationDirection String?   @map("reconciliation_direction") @db.VarChar(16)
+  directionConfirmedAt    DateTime? @map("direction_confirmed_at") @db.DateTime(3)
+  directionConfirmedById  Int?      @map("direction_confirmed_by") @db.UnsignedInt
+  createdAt               DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt               DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt               DateTime? @map("deleted_at") @db.DateTime(3)
+
+  importBatch           ImportBatch               @relation(fields: [importBatchId], references: [id], onDelete: Restrict)
+  voucherSources        VoucherSource[]
+  aiSuggestions         AiSuggestion[]
+  voucher               Voucher?                  @relation("BankTransactionVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
+  receivableSettlement  ReceivableSettlement?     @relation("ReceivableSettlementBank")
+  payableSettlement     PayableSettlement?        @relation("PayableSettlementBank")
+  reconciliationMatches BankReconciliationMatch[]
+  reimbursementPayment  Reimbursement?            @relation("ReimbursementPaymentBank")
+  taxPayment             TaxPayment?               @relation("TaxPaymentBank")
+  directionConfirmedBy  User?                     @relation("BankDirectionConfirmer", fields: [directionConfirmedById], references: [id], onDelete: SetNull)
+
+  @@index([transactionTime])
+  @@index([transactionDate])
+  @@index([voucherId])
+  @@index([importBatchId])
+  @@index([directionConfirmedById])
+  @@index([deletedAt])
+  @@map("bank_transactions")
+}
+
+model Invoice {
+  id                     Int                       @id @default(autoincrement()) @db.UnsignedInt
+  importBatchId          Int                       @map("import_batch_id") @db.UnsignedInt
+  format                 InvoiceFormat
+  status                 Int                       @default(0) @db.UnsignedTinyInt
+  direction              DocumentDirection         @default(UNKNOWN)
+  invoiceType            InvoiceType               @default(UNKNOWN) @map("invoice_type")
+  invoiceNumber          String                    @map("invoice_number") @db.VarChar(64)
+  issueTime              DateTime                  @map("issue_time") @db.DateTime(3)
+  issueDate              DateTime                  @map("issue_date") @db.Date
+  importTime             DateTime                  @default(now()) @map("import_time") @db.DateTime(3)
+  voucherId              Int?                      @map("voucher_id") @db.UnsignedInt
+  reimbursementId        Int?                      @map("reimbursement_id") @db.UnsignedInt
+  taxDeductionStatus     Int                       @default(0) @map("tax_deduction_status") @db.UnsignedTinyInt
+  deductibleTaxAmount    Decimal                   @default(0) @map("deductible_tax_amount") @db.Decimal(19, 4)
+  verificationStatus     InvoiceVerificationStatus @default(PENDING) @map("verification_status")
+  verificationMessage    String?                   @map("verification_message") @db.VarChar(500)
+  verifiedAt             DateTime?                 @map("verified_at") @db.DateTime(3)
+  verifiedById           Int?                      @map("verified_by_id") @db.UnsignedInt
+  voidedAt               DateTime?                 @map("voided_at") @db.DateTime(3)
+  redInvoiceOfId         Int?                      @map("red_invoice_of_id") @db.UnsignedInt
+  sellerName             String                    @map("seller_name") @db.VarChar(200)
+  sellerIdNum            String                    @map("seller_id_num") @db.VarChar(64)
+  buyerName              String                    @map("buyer_name") @db.VarChar(200)
+  buyerIdNum             String                    @map("buyer_id_num") @db.VarChar(64)
+  totalAmountWithoutTax  Decimal                   @map("total_amount_without_tax") @db.Decimal(19, 4)
+  totalTaxAmount         Decimal                   @map("total_tax_amount") @db.Decimal(19, 4)
+  totalTaxIncludedAmount Decimal                   @map("total_tax_included_amount") @db.Decimal(19, 4)
+  currency               String                    @default("CNY") @db.Char(3)
+  sourceFileHash         String                    @map("source_file_hash") @db.Char(64)
+  rawData                Json?                     @map("raw_data")
+  createdAt              DateTime                  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt              DateTime                  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt              DateTime?                 @map("deleted_at") @db.DateTime(3)
+
+  importBatch    ImportBatch     @relation(fields: [importBatchId], references: [id], onDelete: Restrict)
+  items          InvoiceItem[]
+  voucherSources VoucherSource[]
+  aiSuggestions  AiSuggestion[]
+  voucher        Voucher?        @relation("InvoiceVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
+  reimbursement  Reimbursement?  @relation(fields: [reimbursementId], references: [id], onDelete: Restrict)
+  redInvoiceOf   Invoice?        @relation("InvoiceRedLetter", fields: [redInvoiceOfId], references: [id], onDelete: Restrict)
+  redInvoices    Invoice[]       @relation("InvoiceRedLetter")
+  usages         InvoiceUsage[]
+
+  @@unique([sellerIdNum, invoiceNumber])
+  @@index([buyerIdNum, issueTime])
+  @@index([issueDate])
+  @@index([voucherId])
+  @@index([reimbursementId])
+  @@index([taxDeductionStatus])
+  @@index([verificationStatus])
+  @@index([redInvoiceOfId])
+  @@index([sourceFileHash])
+  @@index([importBatchId])
+  @@index([deletedAt])
+  @@map("invoices")
+}
+
+model InvoiceUsage {
+  id          Int      @id @default(autoincrement()) @db.UnsignedInt
+  invoiceId   Int      @map("invoice_id") @db.UnsignedInt
+  sourceType  String   @map("source_type") @db.VarChar(64)
+  sourceId    Int      @map("source_id") @db.UnsignedInt
+  amount      Decimal  @db.Decimal(19, 4)
+  createdById Int      @map("created_by_id") @db.UnsignedInt
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, sourceType, sourceId])
+  @@index([sourceType, sourceId])
+  @@map("invoice_usages")
+}
+
+model SalesInvoiceRequest {
+  id                 Int         @id @default(autoincrement()) @db.UnsignedInt
+  requestNo          String      @unique @map("request_no") @db.VarChar(64)
+  buyerName          String      @map("buyer_name") @db.VarChar(200)
+  buyerIdNum         String      @map("buyer_id_num") @db.VarChar(64)
+  invoiceType        InvoiceType @default(ORDINARY) @map("invoice_type")
+  amountWithoutTax   Decimal     @map("amount_without_tax") @db.Decimal(19, 4)
+  taxAmount          Decimal     @map("tax_amount") @db.Decimal(19, 4)
+  amountIncludingTax Decimal     @map("amount_including_tax") @db.Decimal(19, 4)
+  items              Json?
+  status             Int         @default(0) @db.UnsignedTinyInt
+  remark             String?     @db.VarChar(500)
+  rejectReason       String?     @map("reject_reason") @db.VarChar(500)
+  issuedInvoiceId    Int?        @unique @map("issued_invoice_id") @db.UnsignedInt
+  requestedById      Int         @map("requested_by_id") @db.UnsignedInt
+  approvedById       Int?        @map("approved_by_id") @db.UnsignedInt
+  approvedAt         DateTime?   @map("approved_at") @db.DateTime(3)
+  createdAt          DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt          DateTime?   @map("deleted_at") @db.DateTime(3)
+
+  @@index([status, createdAt])
+  @@index([buyerIdNum, status])
+  @@index([deletedAt])
+  @@map("sales_invoice_requests")
+}
+
+model InvoiceItem {
+  id                    Int       @id @default(autoincrement()) @db.UnsignedInt
+  invoiceId             Int       @map("invoice_id") @db.UnsignedInt
+  lineNo                Int       @map("line_no") @db.UnsignedSmallInt
+  itemName              String    @map("item_name") @db.VarChar(500)
+  specification         String?   @db.VarChar(200)
+  unit                  String?   @db.VarChar(50)
+  quantity              Decimal?  @db.Decimal(19, 6)
+  unitPrice             Decimal?  @map("unit_price") @db.Decimal(19, 6)
+  amount                Decimal   @db.Decimal(19, 4)
+  taxRate               Decimal?  @map("tax_rate") @db.Decimal(9, 6)
+  taxAmount             Decimal?  @map("tax_amount") @db.Decimal(19, 4)
+  taxClassificationCode String?   @map("tax_classification_code") @db.VarChar(64)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt             DateTime? @map("deleted_at") @db.DateTime(3)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, lineNo])
+  @@index([deletedAt])
+  @@map("invoice_items")
+}

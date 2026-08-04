@@ -1,0 +1,59 @@
+model FixedAsset {
+  id                           Int                  @id @default(autoincrement()) @db.UnsignedInt
+  assetNo                      String               @unique @map("asset_no") @db.VarChar(64)
+  name                         String               @db.VarChar(200)
+  category                     String               @db.VarChar(64)
+  purchaseDate                 DateTime             @map("purchase_date") @db.Date
+  startUseDate                 DateTime             @map("start_use_date") @db.Date
+  originalValue                Decimal              @map("original_value") @db.Decimal(19, 4)
+  residualRate                 Decimal              @map("residual_rate") @db.Decimal(9, 6)
+  residualValue                Decimal              @map("residual_value") @db.Decimal(19, 4)
+  depreciationMethod           String               @map("depreciation_method") @db.VarChar(32)
+  usefulLifeMonths             Int                  @map("useful_life_months") @db.UnsignedSmallInt
+  accumulatedDepreciation      Decimal              @default(0) @map("accumulated_depreciation") @db.Decimal(19, 4)
+  netValue                     Decimal              @map("net_value") @db.Decimal(19, 4)
+  department                   String?              @db.VarChar(100)
+  custodian                    String?              @db.VarChar(100)
+  depreciationExpenseAccountId Int?                 @map("depreciation_expense_account_id") @db.UnsignedInt
+  status                       Int                  @default(0) @db.UnsignedTinyInt
+  eventId                      Int?                 @unique @map("event_id") @db.UnsignedInt
+  createdById                  Int                  @map("created_by") @db.UnsignedInt
+  createdAt                    DateTime             @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt                    DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt                    DateTime?            @map("deleted_at") @db.DateTime(3)
+  event                        AccountingEvent?     @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  createdBy                    User                 @relation("FixedAssetCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  depreciationExpenseAccount   Account?             @relation("FixedAssetDepreciationExpenseAccount", fields: [depreciationExpenseAccountId], references: [id], onDelete: Restrict)
+  depreciationRecords          DepreciationRecord[]
+  disposals                    FixedAssetDisposal[]
+
+  @@index([category, status])
+  @@index([depreciationExpenseAccountId])
+  @@index([deletedAt])
+  @@map("fixed_assets")
+}
+
+model FixedAssetDisposal {
+  id                      Int       @id @default(autoincrement()) @db.UnsignedInt
+  assetId                 Int       @map("asset_id") @db.UnsignedInt
+  disposalType            String    @map("disposal_type") @db.VarChar(16)
+  disposalDate            DateTime  @map("disposal_date") @db.Date
+  proceeds                Decimal   @default(0) @db.Decimal(19, 4)
+  accumulatedDepreciation Decimal   @map("accumulated_depreciation") @db.Decimal(19, 4)
+  netBookValue            Decimal   @map("net_book_value") @db.Decimal(19, 4)
+  gainLoss                Decimal   @map("gain_loss") @db.Decimal(19, 4)
+  reason                  String?   @db.VarChar(500)
+  voucherId               Int?      @unique @map("voucher_id") @db.UnsignedInt
+  createdById             Int       @map("created_by") @db.UnsignedInt
+  createdAt               DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt               DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt               DateTime? @map("deleted_at") @db.DateTime(3)
+
+  asset     FixedAsset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  voucher   Voucher?   @relation("FixedAssetDisposalVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
+  createdBy User       @relation("FixedAssetDisposalCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([assetId, deletedAt])
+  @@index([disposalDate])
+  @@map("fixed_asset_disposals")
+}

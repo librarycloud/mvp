@@ -1,0 +1,48 @@
+model BudgetPlan {
+  id               Int          @id @default(autoincrement()) @db.UnsignedInt
+  fiscalYear       Int          @map("fiscal_year") @db.UnsignedSmallInt
+  activeFiscalYear Int?         @unique @map("active_fiscal_year") @db.UnsignedSmallInt
+  name             String       @db.VarChar(100)
+  status           Int          @default(1) @db.UnsignedTinyInt
+  createdAt        DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt        DateTime?    @map("deleted_at") @db.DateTime(3)
+  lines            BudgetLine[]
+
+  @@unique([fiscalYear, name])
+  @@index([fiscalYear, status])
+  @@index([deletedAt])
+  @@map("budget_plans")
+}
+
+model BudgetLine {
+  id           Int                 @id @default(autoincrement()) @db.UnsignedInt
+  planId       Int                 @map("plan_id") @db.UnsignedInt
+  expenseType  String              @map("expense_type") @db.VarChar(100)
+  department   String              @default("") @db.VarChar(100)
+  amount       Decimal             @db.Decimal(19, 4)
+  createdAt    DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
+  plan         BudgetPlan          @relation(fields: [planId], references: [id], onDelete: Restrict)
+  reservations BudgetReservation[]
+
+  @@unique([planId, expenseType, department])
+  @@index([expenseType, department])
+  @@map("budget_lines")
+}
+
+model BudgetReservation {
+  id              Int           @id @default(autoincrement()) @db.UnsignedInt
+  budgetLineId    Int           @map("budget_line_id") @db.UnsignedInt
+  reimbursementId Int           @unique @map("reimbursement_id") @db.UnsignedInt
+  amount          Decimal       @db.Decimal(19, 4)
+  status          Int           @default(0) @db.UnsignedTinyInt
+  warning         Boolean       @default(false)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+  budgetLine      BudgetLine    @relation(fields: [budgetLineId], references: [id], onDelete: Restrict)
+  reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Restrict)
+
+  @@index([budgetLineId, status])
+  @@map("budget_reservations")
+}

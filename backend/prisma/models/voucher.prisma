@@ -1,0 +1,191 @@
+model VoucherSequence {
+  id         Int       @id @default(autoincrement()) @db.UnsignedInt
+  fiscalYear Int       @unique @map("fiscal_year") @db.UnsignedSmallInt
+  nextValue  Int       @default(1) @map("next_value") @db.UnsignedInt
+  createdAt  DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt  DateTime? @map("deleted_at") @db.DateTime(3)
+
+  @@index([deletedAt])
+  @@map("voucher_sequences")
+}
+
+model Voucher {
+  id              Int               @id @default(autoincrement()) @db.UnsignedInt
+  voucherNo       String            @unique @map("voucher_no") @db.VarChar(32)
+  fiscalYear      Int               @map("fiscal_year") @db.UnsignedSmallInt
+  fiscalPeriod    Int               @map("fiscal_period") @db.UnsignedTinyInt
+  sequenceNo      Int               @map("sequence_no") @db.UnsignedInt
+  voucherDate     DateTime          @map("voucher_date") @db.Date
+  postingDate     DateTime          @map("posting_date") @db.Date
+  periodId        Int               @map("period_id") @db.UnsignedInt
+  summary         String            @db.VarChar(500)
+  sourceType      VoucherSourceType @map("source_type")
+  category        VoucherCategory   @default(OTHER)
+  status          Int               @default(0) @db.UnsignedTinyInt
+  attachmentCount Int               @default(0) @map("attachment_count") @db.UnsignedSmallInt
+  totalDebit      Decimal           @map("total_debit") @db.Decimal(19, 4)
+  totalCredit     Decimal           @map("total_credit") @db.Decimal(19, 4)
+  createdById     Int               @map("created_by_id") @db.UnsignedInt
+  reviewerId      Int?              @map("reviewer_id") @db.UnsignedInt
+  reviewedAt      DateTime?         @map("reviewed_at") @db.DateTime(3)
+  postedById      Int?              @map("posted_by") @db.UnsignedInt
+  postedAt        DateTime?         @map("posted_at") @db.DateTime(3)
+  voidById        Int?              @map("void_by") @db.UnsignedInt
+  voidAt          DateTime?         @map("void_at") @db.DateTime(3)
+  voidReason      String?           @map("void_reason") @db.VarChar(500)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt       DateTime?         @map("deleted_at") @db.DateTime(3)
+
+  createdBy              User                  @relation("VoucherCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  reviewer               User?                 @relation("VoucherReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
+  postedBy               User?                 @relation("VoucherPoster", fields: [postedById], references: [id], onDelete: Restrict)
+  voidBy                 User?                 @relation("VoucherVoider", fields: [voidById], references: [id], onDelete: Restrict)
+  period                 AccountingPeriod      @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  entries                VoucherEntry[]
+  attachments            VoucherAttachment[]
+  sources                VoucherSource[]
+  aiSuggestions          AiSuggestion[]
+  linkedInvoices         Invoice[]             @relation("InvoiceVoucher")
+  linkedBankTransactions BankTransaction[]     @relation("BankTransactionVoucher")
+  accountingEvents       AccountingEvent[]
+  depreciation           DepreciationRecord?   @relation("DepreciationVoucher")
+  receivableSettlement   ReceivableSettlement? @relation("ReceivableSettlementVoucher")
+  payableSettlement      PayableSettlement?    @relation("PayableSettlementVoucher")
+  salary                 Salary?               @relation("SalaryVoucher")
+  yearEndClosing         YearEndClosing?       @relation("YearEndVoucher")
+  reimbursement          Reimbursement?        @relation("ReimbursementVoucher")
+  fixedAssetDisposal     FixedAssetDisposal?   @relation("FixedAssetDisposalVoucher")
+
+  @@unique([fiscalYear, sequenceNo])
+  @@index([fiscalYear, fiscalPeriod, status])
+  @@index([category, voucherDate])
+  @@index([voucherDate])
+  @@index([periodId, postingDate, status])
+  @@index([createdById])
+  @@index([reviewerId])
+  @@index([postedById])
+  @@index([voidById])
+  @@index([deletedAt])
+  @@map("vouchers")
+}
+
+model AccountingPeriod {
+  id         Int       @id @default(autoincrement()) @db.UnsignedInt
+  year       Int       @db.UnsignedSmallInt
+  month      Int       @db.UnsignedTinyInt
+  periodCode String    @unique @map("period_code") @db.Char(7)
+  startDate  DateTime  @map("start_date") @db.Date
+  endDate    DateTime  @map("end_date") @db.Date
+  status     Int       @default(0) @db.UnsignedTinyInt
+  closedAt   DateTime? @map("closed_at") @db.DateTime(3)
+  closedById Int?      @map("closed_by") @db.UnsignedInt
+  createdAt  DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt  DateTime? @map("deleted_at") @db.DateTime(3)
+
+  closedBy            User?                @relation("AccountingPeriodCloser", fields: [closedById], references: [id], onDelete: Restrict)
+  vouchers            Voucher[]
+  depreciationRecords DepreciationRecord[]
+  salaries            Salary[]
+  bankReconciliations BankReconciliation[]
+
+  @@unique([year, month])
+  @@index([status, startDate, endDate])
+  @@index([closedById])
+  @@index([deletedAt])
+  @@map("accounting_periods")
+}
+
+model VoucherEntry {
+  id           Int       @id @default(autoincrement()) @db.UnsignedInt
+  voucherId    Int       @map("voucher_id") @db.UnsignedInt
+  lineNo       Int       @map("line_no") @db.UnsignedSmallInt
+  accountId    Int       @map("account_id") @db.UnsignedInt
+  summary      String    @db.VarChar(500)
+  debitAmount  Decimal   @default(0) @map("debit_amount") @db.Decimal(19, 4)
+  creditAmount Decimal   @default(0) @map("credit_amount") @db.Decimal(19, 4)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime? @map("deleted_at") @db.DateTime(3)
+
+  voucher               Voucher                   @relation(fields: [voucherId], references: [id], onDelete: Restrict)
+  account               Account                   @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  reconciliationMatches BankReconciliationMatch[]
+  dimensions            VoucherEntryDimension[]
+
+  @@unique([voucherId, lineNo])
+  @@index([accountId])
+  @@index([deletedAt])
+  @@map("voucher_entries")
+}
+
+model VoucherAttachment {
+  id           Int       @id @default(autoincrement()) @db.UnsignedInt
+  voucherId    Int       @map("voucher_id") @db.UnsignedInt
+  originalName String    @map("original_name") @db.VarChar(255)
+  storagePath  String    @map("storage_path") @db.VarChar(500)
+  mimeType     String    @map("mime_type") @db.VarChar(100)
+  fileSize     BigInt    @map("file_size") @db.UnsignedBigInt
+  fileHash     String    @map("file_hash") @db.Char(64)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime? @map("deleted_at") @db.DateTime(3)
+
+  voucher Voucher @relation(fields: [voucherId], references: [id], onDelete: Restrict)
+
+  @@index([voucherId])
+  @@index([deletedAt])
+  @@map("voucher_attachments")
+}
+
+model VoucherSource {
+  id                Int       @id @default(autoincrement()) @db.UnsignedInt
+  voucherId         Int       @map("voucher_id") @db.UnsignedInt
+  bankTransactionId Int?      @map("bank_transaction_id") @db.UnsignedInt
+  invoiceId         Int?      @map("invoice_id") @db.UnsignedInt
+  createdAt         DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt         DateTime? @map("deleted_at") @db.DateTime(3)
+
+  voucher         Voucher          @relation(fields: [voucherId], references: [id], onDelete: Restrict)
+  bankTransaction BankTransaction? @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  invoice         Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([voucherId, bankTransactionId])
+  @@unique([voucherId, invoiceId])
+  @@index([bankTransactionId])
+  @@index([invoiceId])
+  @@index([deletedAt])
+  @@map("voucher_sources")
+}
+
+model AiSuggestion {
+  id                Int       @id @default(autoincrement()) @db.UnsignedInt
+  bankTransactionId Int?      @map("bank_transaction_id") @db.UnsignedInt
+  invoiceId         Int?      @map("invoice_id") @db.UnsignedInt
+  voucherId         Int?      @map("voucher_id") @db.UnsignedInt
+  requestedById     Int       @map("requested_by_id") @db.UnsignedInt
+  status            Int       @default(0) @db.UnsignedTinyInt
+  model             String    @db.VarChar(100)
+  inputSnapshot     Json      @map("input_snapshot")
+  suggestion        Json?
+  errorMessage      String?   @map("error_message") @db.Text
+  acceptedAt        DateTime? @map("accepted_at") @db.DateTime(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt         DateTime? @map("deleted_at") @db.DateTime(3)
+
+  bankTransaction BankTransaction? @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  invoice         Invoice?         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  voucher         Voucher?         @relation(fields: [voucherId], references: [id], onDelete: Restrict)
+  requestedBy     User             @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([bankTransactionId])
+  @@index([invoiceId])
+  @@index([voucherId])
+  @@index([requestedById, createdAt])
+  @@index([deletedAt])
+  @@map("ai_suggestions")
+}

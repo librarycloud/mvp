@@ -1,0 +1,64 @@
+model TaxDeclaration {
+  id             Int                  @id @default(autoincrement()) @db.UnsignedInt
+  taxType        TaxDeclarationType   @map("tax_type")
+  fiscalYear     Int                  @map("fiscal_year") @db.UnsignedSmallInt
+  periodType     ReportPeriodType     @map("period_type")
+  period         Int?                 @db.UnsignedTinyInt
+  periodStart    DateTime             @map("period_start") @db.Date
+  periodEnd      DateTime             @map("period_end") @db.Date
+  status         TaxDeclarationStatus @default(DRAFT)
+  payableAmount  Decimal              @default(0) @map("payable_amount") @db.Decimal(19, 4)
+  declaredAmount Decimal              @default(0) @map("declared_amount") @db.Decimal(19, 4)
+  declarationNo  String?              @map("declaration_no") @db.VarChar(100)
+  declaredAt     DateTime?            @map("declared_at") @db.DateTime(3)
+  reviewedAt     DateTime?            @map("reviewed_at") @db.DateTime(3)
+  createdById    Int                  @map("created_by_id") @db.UnsignedInt
+  reviewedById   Int?                 @map("reviewed_by_id") @db.UnsignedInt
+  declaredById   Int?                 @map("declared_by_id") @db.UnsignedInt
+  createdAt      DateTime             @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt      DateTime?            @map("deleted_at") @db.DateTime(3)
+
+  lines    TaxDeclarationLine[]
+  payments TaxPayment[]
+
+  @@unique([taxType, fiscalYear, periodType, period])
+  @@index([status, periodStart, periodEnd])
+  @@index([deletedAt])
+  @@map("tax_declarations")
+}
+
+model TaxDeclarationLine {
+  id            Int      @id @default(autoincrement()) @db.UnsignedInt
+  declarationId Int      @map("declaration_id") @db.UnsignedInt
+  lineCode      String   @map("line_code") @db.VarChar(64)
+  lineName      String   @map("line_name") @db.VarChar(200)
+  calculated    Decimal  @default(0) @map("calculated_amount") @db.Decimal(19, 4)
+  adjustment    Decimal  @default(0) @map("adjustment_amount") @db.Decimal(19, 4)
+  declared      Decimal  @default(0) @map("declared_amount") @db.Decimal(19, 4)
+  remark        String?  @db.VarChar(500)
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  declaration TaxDeclaration @relation(fields: [declarationId], references: [id], onDelete: Restrict)
+
+  @@unique([declarationId, lineCode])
+  @@map("tax_declaration_lines")
+}
+
+model TaxPayment {
+  id                Int      @id @default(autoincrement()) @db.UnsignedInt
+  declarationId     Int      @map("declaration_id") @db.UnsignedInt
+  amount            Decimal  @db.Decimal(19, 4)
+  paymentDate       DateTime @map("payment_date") @db.Date
+  paymentReference  String?  @map("payment_reference") @db.VarChar(100)
+  bankTransactionId Int?     @unique @map("bank_transaction_id") @db.UnsignedInt
+  paidById          Int      @map("paid_by_id") @db.UnsignedInt
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  declaration     TaxDeclaration  @relation(fields: [declarationId], references: [id], onDelete: Restrict)
+  bankTransaction BankTransaction? @relation("TaxPaymentBank", fields: [bankTransactionId], references: [id], onDelete: Restrict)
+
+  @@index([bankTransactionId])
+  @@map("tax_payments")
+}

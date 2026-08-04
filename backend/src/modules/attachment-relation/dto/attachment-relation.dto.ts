@@ -1,0 +1,5 @@
+import { Static, Type } from "@sinclair/typebox";
+const source = Type.Union([Type.Literal("Voucher"),Type.Literal("Invoice"),Type.Literal("BankTransaction"),Type.Literal("AccountingEvent"),Type.Literal("FixedAsset"),Type.Literal("Reimbursement"),Type.Literal("Salary"),Type.Literal("Company"),Type.Literal("System"),Type.Literal("Other")]); const relation = Type.Union([Type.Literal("ORIGINAL"),Type.Literal("SOURCE"),Type.Literal("GENERATED"),Type.Literal("REFERENCE"),Type.Literal("RECEIPT"),Type.Literal("CONTRACT"),Type.Literal("OTHER")]);
+export const SourceParamsSchema = Type.Object({ sourceType: source, sourceId: Type.Integer({ minimum: 1 }) }); export const IdParamsSchema = Type.Object({ id: Type.Integer({ minimum: 1 }) });
+export const UploadQuerySchema = Type.Object({ sourceType: source, sourceId: Type.Integer({ minimum: 1 }), relationType: Type.Optional(relation), remark: Type.Optional(Type.String({ maxLength: 500 })), category: Type.Optional(Type.String({ maxLength: 64 })) });
+export type SourceParams = Static<typeof SourceParamsSchema>; export type IdParams = Static<typeof IdParamsSchema>; export type UploadQuery = Static<typeof UploadQuerySchema>;

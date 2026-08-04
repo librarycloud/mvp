@@ -1,0 +1,75 @@
+model Employee {
+  id              Int       @id @default(autoincrement()) @db.UnsignedInt
+  employeeNo      String    @unique @map("employee_no") @db.VarChar(64)
+  name            String    @db.VarChar(100)
+  idNumber        String?   @map("id_number") @db.VarChar(32)
+  department      String?   @db.VarChar(100)
+  position        String?   @db.VarChar(100)
+  bankName        String?   @map("bank_name") @db.VarChar(200)
+  bankAccount     String?   @map("bank_account") @db.VarChar(100)
+  joinDate        DateTime? @map("join_date") @db.Date
+  baseSalary      Decimal   @default(0) @map("base_salary") @db.Decimal(19, 4)
+  socialInsurance Decimal   @default(0) @map("social_insurance") @db.Decimal(19, 4)
+  housingFund     Decimal   @default(0) @map("housing_fund") @db.Decimal(19, 4)
+  status          Int       @default(0) @db.UnsignedTinyInt
+  createdById     Int       @map("created_by") @db.UnsignedInt
+  createdAt       DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt       DateTime? @map("deleted_at") @db.DateTime(3)
+  createdBy       User      @relation("EmployeeCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  salaries        Salary[]
+
+  @@index([status, deletedAt])
+  @@map("employees")
+}
+
+model SalaryItem {
+  id            Int       @id @default(autoincrement()) @db.UnsignedInt
+  code          String    @unique @db.VarChar(64)
+  name          String    @db.VarChar(100)
+  category      String    @db.VarChar(32)
+  defaultAmount Decimal   @default(0) @map("default_amount") @db.Decimal(19, 4)
+  sortOrder     Int       @default(0) @map("sort_order") @db.UnsignedSmallInt
+  enabled       Boolean   @default(true)
+  remark        String?   @db.VarChar(500)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt     DateTime? @map("deleted_at") @db.DateTime(3)
+
+  @@index([category, enabled])
+  @@index([deletedAt])
+  @@map("salary_items")
+}
+
+model Salary {
+  id                  Int              @id @default(autoincrement()) @db.UnsignedInt
+  employeeId          Int              @map("employee_id") @db.UnsignedInt
+  periodId            Int              @map("period_id") @db.UnsignedInt
+  baseSalary          Decimal          @default(0) @map("base_salary") @db.Decimal(19, 4)
+  bonus               Decimal          @default(0) @db.Decimal(19, 4)
+  allowance           Decimal          @default(0) @db.Decimal(19, 4)
+  deduction           Decimal          @default(0) @db.Decimal(19, 4)
+  socialInsurance     Decimal          @default(0) @map("social_insurance") @db.Decimal(19, 4)
+  housingFund         Decimal          @default(0) @map("housing_fund") @db.Decimal(19, 4)
+  individualIncomeTax Decimal          @default(0) @map("individual_income_tax") @db.Decimal(19, 4)
+  grossAmount         Decimal          @map("gross_amount") @db.Decimal(19, 4)
+  netAmount           Decimal          @map("net_amount") @db.Decimal(19, 4)
+  status              Int              @default(2) @db.UnsignedTinyInt
+  eventId             Int              @unique @map("event_id") @db.UnsignedInt
+  voucherId           Int              @unique @map("voucher_id") @db.UnsignedInt
+  createdById         Int              @map("created_by") @db.UnsignedInt
+  createdAt           DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt           DateTime         @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt           DateTime?        @map("deleted_at") @db.DateTime(3)
+  employee            Employee         @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  period              AccountingPeriod @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  event               AccountingEvent  @relation("SalaryEvent", fields: [eventId], references: [id], onDelete: Restrict)
+  voucher             Voucher          @relation("SalaryVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
+  createdBy           User             @relation("SalaryCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([employeeId, periodId])
+  @@index([periodId, status])
+  @@index([employeeId, deletedAt])
+  @@index([deletedAt])
+  @@map("salaries")
+}

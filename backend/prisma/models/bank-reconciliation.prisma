@@ -1,0 +1,54 @@
+model BankReconciliation {
+  id                      Int       @id @default(autoincrement()) @db.UnsignedInt
+  reconciliationNo        String    @unique @map("reconciliation_no") @db.VarChar(64)
+  periodId                Int       @map("period_id") @db.UnsignedInt
+  bankAccountId           Int       @map("bank_account_id") @db.UnsignedInt
+  statementOpeningBalance Decimal   @default(0) @map("statement_opening_balance") @db.Decimal(19, 4)
+  statementClosingBalance Decimal   @default(0) @map("statement_closing_balance") @db.Decimal(19, 4)
+  bookClosingBalance      Decimal   @default(0) @map("book_closing_balance") @db.Decimal(19, 4)
+  difference              Decimal   @default(0) @db.Decimal(19, 4)
+  status                  Int       @default(0) @db.UnsignedTinyInt
+  remark                  String?   @db.VarChar(500)
+  completedAt             DateTime? @map("completed_at") @db.DateTime(3)
+  completedById           Int?      @map("completed_by") @db.UnsignedInt
+  createdById             Int       @map("created_by") @db.UnsignedInt
+  createdAt               DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt               DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt               DateTime? @map("deleted_at") @db.DateTime(3)
+
+  period      AccountingPeriod          @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  bankAccount Account                   @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  createdBy   User                      @relation("BankReconciliationCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy User?                     @relation("BankReconciliationCompleter", fields: [completedById], references: [id], onDelete: Restrict)
+  matches     BankReconciliationMatch[]
+
+  @@unique([periodId, bankAccountId])
+  @@index([status, periodId])
+  @@index([deletedAt])
+  @@map("bank_reconciliations")
+}
+
+model BankReconciliationMatch {
+  id                Int       @id @default(autoincrement()) @db.UnsignedInt
+  reconciliationId  Int       @map("reconciliation_id") @db.UnsignedInt
+  bankTransactionId Int       @map("bank_transaction_id") @db.UnsignedInt
+  voucherEntryId    Int       @map("voucher_entry_id") @db.UnsignedInt
+  matchedAmount     Decimal   @map("matched_amount") @db.Decimal(19, 4)
+  matchType         String    @default("MANUAL") @map("match_type") @db.VarChar(16)
+  matchedById       Int       @map("matched_by") @db.UnsignedInt
+  matchedAt         DateTime  @default(now()) @map("matched_at") @db.DateTime(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt         DateTime? @map("deleted_at") @db.DateTime(3)
+
+  reconciliation  BankReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  bankTransaction BankTransaction    @relation(fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  voucherEntry    VoucherEntry       @relation(fields: [voucherEntryId], references: [id], onDelete: Restrict)
+  matchedBy       User               @relation("BankMatchCreator", fields: [matchedById], references: [id], onDelete: Restrict)
+
+  @@unique([reconciliationId, bankTransactionId, voucherEntryId])
+  @@index([bankTransactionId, deletedAt])
+  @@index([voucherEntryId, deletedAt])
+  @@index([deletedAt])
+  @@map("bank_reconciliation_matches")
+}
