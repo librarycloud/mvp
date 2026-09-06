@@ -117,4 +117,17 @@ export async function bankTransactionRoutes(
     },
     handler: options.controller.getById,
   });
+
+  app.post("/:id/vouchers", {
+    preHandler: operateBank,
+    schema: {
+      tags: ["银行流水"],
+      summary: "关联记账凭证",
+      security: [{ bearerAuth: [] }],
+      params: BankTransactionParamsSchema,
+      body: Type.Object({ voucherId: Type.Integer({ minimum: 1 }) }),
+      response: { 200: success(BankTransactionSchema) },
+    },
+    handler: options.controller.linkVoucher,
+  });
 }

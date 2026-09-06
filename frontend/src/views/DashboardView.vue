@@ -58,7 +58,7 @@ const todos = computed<TodoItem[]>(() => [
     label: auth.canManageAccounting ? "待审核凭证" : "审核中的凭证",
     description: auth.canManageAccounting ? "需要完成审核或记账" : "等待财务主管处理",
     count: pendingVoucherTotal.value,
-    path: "/vouchers",
+    path: "/vouchers?status=1",
     icon: DocumentChecked,
     tone: "warning",
   },
@@ -66,7 +66,7 @@ const todos = computed<TodoItem[]>(() => [
     label: auth.canManageAccounting ? "待审批报销" : "审批中的报销",
     description: auth.canManageAccounting ? "需要审批报销申请" : "已提交、等待审批",
     count: Number(reimbursementSummary.value.status1 ?? 0),
-    path: "/reimbursements",
+    path: "/reimbursements?status=1",
     icon: Wallet,
     tone: "primary",
   },
@@ -74,7 +74,7 @@ const todos = computed<TodoItem[]>(() => [
     label: auth.canOperateCash ? "待付款报销" : "已通过待付款",
     description: auth.canOperateCash ? "审批通过，等待付款入账" : "等待出纳付款",
     count: Number(reimbursementSummary.value.status2 ?? 0),
-    path: "/reimbursements",
+    path: "/reimbursements?status=2",
     icon: WalletFilled,
     tone: "success",
   },
@@ -185,7 +185,13 @@ onMounted(loadDashboard);
       <section class="dashboard-panel recent-panel">
         <div class="panel-heading"><div><h3>最近凭证</h3><span>最近录入的 5 张凭证</span></div><RouterLink to="/vouchers">全部凭证</RouterLink></div>
         <el-table :data="recentVouchers" size="small" empty-text="暂无凭证">
-          <el-table-column prop="voucherNo" label="凭证号" min-width="130"/>
+          <el-table-column label="凭证号" min-width="130">
+            <template #default="{row}">
+              <RouterLink :to="`/vouchers?voucherId=${row.id}`" class="recent-voucher-link">
+                {{ row.voucherNo }}
+              </RouterLink>
+            </template>
+          </el-table-column>
           <el-table-column label="入账日期" width="110"><template #default="{row}">{{ formatBusinessDate(row.postingDate) }}</template></el-table-column>
           <el-table-column prop="summary" label="摘要" min-width="170" show-overflow-tooltip/>
           <el-table-column label="金额" width="110" align="right"><template #default="{row}">{{ money(row.totalDebit) }}</template></el-table-column>
@@ -274,4 +280,6 @@ onMounted(loadDashboard);
   .dashboard-metrics { grid-template-columns:1fr; }
   .dashboard-metric { min-height:86px; }
 }
+.recent-voucher-link { color:#0f766e; text-decoration:none; font-weight:500; }
+.recent-voucher-link:hover { text-decoration:underline; }
 </style>

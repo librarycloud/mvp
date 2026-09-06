@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client.js";
 import { IMPORT_STATUS } from "../../common/status-codes.js";
+import { AppError } from "../../common/errors/app-error.js";
 import type {
   BankImportContext,
   BankImportError,
@@ -32,6 +33,7 @@ export interface BankTransactionRepository {
   createImport(input: CreateBankImportInput, context: BankImportContext): Promise<BankImportSummary>;
   list(filter: BankTransactionFilter): Promise<{ items: unknown[]; total: number }>;
   findById(id: number): Promise<unknown | null>;
+  linkVoucher(transactionId: number, voucherId: number, actorId: number): Promise<void>;
 }
 
 export class PrismaBankTransactionRepository implements BankTransactionRepository {
@@ -215,6 +217,44 @@ export class PrismaBankTransactionRepository implements BankTransactionRepositor
           : "PARTIAL",
       reconciledAmount: reconciledAmount.toString(),
     };
+  }
+
+  async linkVoucher(transactionId: number, voucherId: number, actorId: number): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const transaction = await tx.bankTransaction.findFirst({
+        where: { id: transactionId, deletedAt: null },
+      });
+      if (!transaction) throw new AppError("BANK_TRANSACTION_NOT_FOUND", "银行流水不存在", 404);
+      const voucher = await tx.voucher.findFirst({
+        where: { id: voucherId, deletedAt: null },
+      });
+      if (!voucher) throw new AppError("VOUCHER_NOT_FOUND", "记账凭证不存在", 404);
+
+      await tx.bankTransaction.update({
+        where: { id: transactionId },
+        data: { voucherId },
+      });
+
+      const existingSource = await tx.voucherSource.findFirst({
+        where: { voucherId, bankTransactionId: transactionId, deletedAt: null },
+      });
+      if (!existingSource) {
+        await tx.voucherSource.create({
+          data: { voucherId, bankTransactionId: transactionId },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: "UPDATE",
+          resourceType: "BankTransaction",
+          resourceId: transactionId,
+          description: "银行流水关联记账凭证",
+          afterData: { voucherId, voucherNo: voucher.voucherNo },
+        },
+      });
+    });
   }
 
   private status(inserted: number, skipped: number, failed: number): BankImportSummary["status"] {

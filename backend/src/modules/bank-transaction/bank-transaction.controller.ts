@@ -78,6 +78,11 @@ export class BankTransactionController {
     reply: FastifyReply,
   ) => sendSuccess(reply, await this.service.getById(request.params.id));
 
+  linkVoucher = async (
+    request: FastifyRequest<{ Params: BankTransactionParams; Body: { voucherId: number } }>,
+    reply: FastifyReply,
+  ) => sendSuccess(reply, await this.service.linkVoucher(request.params.id, request.body.voucherId, Number(request.user.sub)));
+
   private context(request: FastifyRequest): BankImportContext {
     const context: BankImportContext = {
       actorId: Number(request.user.sub),

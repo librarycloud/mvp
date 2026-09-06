@@ -4,6 +4,7 @@ import { ElMessage } from "element-plus";
 import { useRouter } from "vue-router";
 import { api } from "../utils/api";
 import { currentBusinessMonthStart, formatBusinessDate, todayBusinessDate } from "../utils/date";
+import { exportToCsv } from "../utils/export";
 import { useClientPagination } from "../composables/useClientPagination";
 
 interface AccountOption {
@@ -17,6 +18,8 @@ interface AccountOption {
 type LedgerMode = "general" | "detail" | "balances" | "trial";
 const router = useRouter();
 const accounts = ref<AccountOption[]>([]);
+const periods = ref<any[]>([]);
+const selectedPeriodId = ref<number | "">("");
 const accountId = ref<number | "">("");
 const startDate = ref(currentBusinessMonthStart());
 const endDate = ref(todayBusinessDate());
@@ -32,7 +35,12 @@ const postableAccounts = computed(() => accounts.value.filter((account) => accou
 async function loadAccounts() {
   accountsLoading.value = true;
   try {
-    accounts.value = await api.get<AccountOption[]>("/accounts?tree=false&isEnabled=true");
+    const [accountList, periodList] = await Promise.all([
+      api.get<AccountOption[]>("/accounts?tree=false&isEnabled=true"),
+      api.get<any[]>("/accounting-periods"),
+    ]);
+    accounts.value = accountList;
+    periods.value = periodList;
   } finally {
     accountsLoading.value = false;
   }
@@ -72,6 +80,96 @@ function openVoucher(voucherId: number) {
   router.push({ path: "/vouchers", query: { voucherId: String(voucherId) } });
 }
 
+function drillToDetail(accId: number) {
+  mode.value = "detail";
+  accountId.value = accId;
+  void query();
+}
+
+function onPeriodSelect(id: number | "") {
+  if (!id) return;
+  const period = periods.value.find((p) => p.id === id);
+  if (period) {
+    startDate.value = period.startDate.slice(0, 10);
+    endDate.value = period.endDate.slice(0, 10);
+    void query();
+  }
+}
+
+function setDateRange(rangeType: "currentMonth" | "lastMonth" | "currentYear") {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+
+  if (rangeType === "currentMonth") {
+    startDate.value = currentBusinessMonthStart();
+    endDate.value = todayBusinessDate();
+  } else if (rangeType === "lastMonth") {
+    const lastMonthDate = new Date(year, month - 1, 1);
+    const lastMonthEnd = new Date(year, month, 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    startDate.value = `${lastMonthDate.getFullYear()}-${pad(lastMonthDate.getMonth() + 1)}-01`;
+    endDate.value = `${lastMonthEnd.getFullYear()}-${pad(lastMonthEnd.getMonth() + 1)}-${pad(lastMonthEnd.getDate())}`;
+  } else if (rangeType === "currentYear") {
+    startDate.value = `${year}-01-01`;
+    endDate.value = todayBusinessDate();
+  }
+  selectedPeriodId.value = "";
+  void query();
+}
+
+function exportLedger() {
+  if (!tableRows.value.length) {
+    ElMessage.warning("当前没有可导出的账簿数据");
+    return;
+  }
+  let filename = "";
+  let headers: string[] = [];
+  let exportRows: (string | number)[][] = [];
+
+  if (mode.value === "general" || mode.value === "detail") {
+    const accName = data.value?.account ? `${data.value.account.code}_${data.value.account.name}` : "";
+    const modeName = mode.value === "general" ? "总分类账" : "明细分类账";
+    filename = `${modeName}_${accName}_${startDate.value}至${endDate.value}`;
+    headers = ["日期", "凭证号", "摘要", "借方", "贷方", "余额"];
+    exportRows = tableRows.value.map((r) => [
+      formatBusinessDate(r.voucherDate),
+      r.voucherNo ?? "",
+      (mode.value === "detail" ? r.entrySummary : r.summary) ?? "",
+      r.debitAmount ?? "",
+      r.creditAmount ?? "",
+      r.balance ?? "",
+    ]);
+  } else if (mode.value === "balances") {
+    filename = `科目余额表_${startDate.value}至${endDate.value}`;
+    headers = ["科目编码", "科目名称", "期初余额", "本期借方", "本期贷方", "期末余额"];
+    exportRows = tableRows.value.map((r) => [
+      r.account?.code ?? "",
+      r.account?.name ?? "",
+      r.opening?.amount ?? "0.00",
+      r.periodDebit ?? "0.00",
+      r.periodCredit ?? "0.00",
+      r.closing?.amount ?? "0.00",
+    ]);
+  } else {
+    filename = `试算平衡表_${startDate.value}至${endDate.value}`;
+    headers = ["科目编码", "科目名称", "期初借方", "期初贷方", "本期借方", "本期贷方", "期末借方", "期末贷方"];
+    exportRows = tableRows.value.map((r) => [
+      r.account?.code ?? "",
+      r.account?.name ?? "",
+      r.openingDebit ?? "0.00",
+      r.openingCredit ?? "0.00",
+      r.periodDebit ?? "0.00",
+      r.periodCredit ?? "0.00",
+      r.closingDebit ?? "0.00",
+      r.closingCredit ?? "0.00",
+    ]);
+  }
+
+  exportToCsv(filename, headers, exportRows);
+  ElMessage.success(`已导出 ${exportRows.length} 行账簿数据`);
+}
+
 function balanceText(balance: { direction: "DEBIT" | "CREDIT" | null; amount: string } | undefined) {
   if (!balance) return "0";
   if (balance.direction === "DEBIT") return `借 ${balance.amount}`;
@@ -84,15 +182,25 @@ onMounted(loadAccounts);
 
 <template>
   <div class="page-grid">
-    <section class="page-heading"><div><h2>账簿查询</h2><p>全部数据由已记账凭证实时派生。</p></div></section>
+    <section class="page-heading">
+      <div>
+        <h2>账簿查询</h2>
+        <p>全部数据由已记账凭证实时派生，支持科目穿透联查与一键导出。</p>
+      </div>
+      <div class="toolbar">
+        <el-button @click="exportLedger">导出 Excel</el-button>
+      </div>
+    </section>
+
     <el-card shadow="never">
       <div class="filter-row">
-        <el-select v-model="mode" style="width: 150px" @change="changeMode">
+        <el-select v-model="mode" style="width: 140px" @change="changeMode">
           <el-option label="总账" value="general"/>
           <el-option label="明细账" value="detail"/>
           <el-option label="科目余额表" value="balances"/>
           <el-option label="试算平衡表" value="trial"/>
         </el-select>
+
         <el-select
           v-if="needsAccount"
           v-model="accountId"
@@ -100,7 +208,7 @@ onMounted(loadAccounts);
           clearable
           :loading="accountsLoading"
           placeholder="搜索科目编码或名称"
-          style="width: 280px"
+          style="width: 260px"
         >
           <el-option
             v-for="account in postableAccounts"
@@ -109,8 +217,26 @@ onMounted(loadAccounts);
             :value="account.id"
           />
         </el-select>
-        <el-date-picker v-model="startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始日期"/>
-        <el-date-picker v-model="endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束日期"/>
+
+        <el-select
+          v-model="selectedPeriodId"
+          clearable
+          placeholder="会计期间"
+          style="width: 130px"
+          @change="onPeriodSelect"
+        >
+          <el-option v-for="p in periods" :key="p.id" :label="p.periodCode" :value="p.id" />
+        </el-select>
+
+        <el-date-picker v-model="startDate" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" style="width: 140px"/>
+        <el-date-picker v-model="endDate" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" style="width: 140px"/>
+
+        <el-button-group>
+          <el-button @click="setDateRange('currentMonth')">本月</el-button>
+          <el-button @click="setDateRange('lastMonth')">上月</el-button>
+          <el-button @click="setDateRange('currentYear')">本年</el-button>
+        </el-button-group>
+
         <el-button type="primary" :loading="loading" @click="query">查询</el-button>
       </div>
     </el-card>
@@ -134,23 +260,49 @@ onMounted(loadAccounts);
       </el-table>
 
       <el-table v-else-if="mode === 'balances'" :data="pagedRows" table-layout="auto" stripe>
-        <el-table-column prop="account.code" label="科目编码" min-width="120"/>
-        <el-table-column prop="account.name" label="科目名称" min-width="180"/>
+        <el-table-column label="科目编码" min-width="120">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="drillToDetail(row.account.id)">{{ row.account.code }}</el-button>
+          </template>
+        </el-table-column>
+        <el-table-column label="科目名称" min-width="180">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="drillToDetail(row.account.id)">{{ row.account.name }}</el-button>
+          </template>
+        </el-table-column>
         <el-table-column prop="opening.amount" label="期初余额" align="right"/>
         <el-table-column prop="periodDebit" label="本期借方" align="right"/>
         <el-table-column prop="periodCredit" label="本期贷方" align="right"/>
         <el-table-column prop="closing.amount" label="期末余额" align="right"/>
+        <el-table-column label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="drillToDetail(row.account.id)">穿透明细</el-button>
+          </template>
+        </el-table-column>
       </el-table>
 
       <el-table v-else :data="pagedRows" table-layout="auto" stripe>
-        <el-table-column prop="account.code" label="科目编码" min-width="120"/>
-        <el-table-column prop="account.name" label="科目名称" min-width="180"/>
+        <el-table-column label="科目编码" min-width="120">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="drillToDetail(row.account.id)">{{ row.account.code }}</el-button>
+          </template>
+        </el-table-column>
+        <el-table-column label="科目名称" min-width="180">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="drillToDetail(row.account.id)">{{ row.account.name }}</el-button>
+          </template>
+        </el-table-column>
         <el-table-column prop="openingDebit" label="期初借方" align="right"/>
         <el-table-column prop="openingCredit" label="期初贷方" align="right"/>
         <el-table-column prop="periodDebit" label="本期借方" align="right"/>
         <el-table-column prop="periodCredit" label="本期贷方" align="right"/>
         <el-table-column prop="closingDebit" label="期末借方" align="right"/>
         <el-table-column prop="closingCredit" label="期末贷方" align="right"/>
+        <el-table-column label="操作" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="drillToDetail(row.account.id)">穿透明细</el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total"/>
       <el-alert v-if="mode === 'trial'" :type="data.isBalanced ? 'success' : 'error'" :closable="false" class="trial-status" :title="data.isBalanced ? '试算平衡' : '试算不平衡'"/>
@@ -159,6 +311,12 @@ onMounted(loadAccounts);
 </template>
 
 <style scoped>
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
 .ledger-summary { margin-bottom: 18px; }
 .trial-status { margin-top: 16px; }
 </style>

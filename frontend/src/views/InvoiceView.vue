@@ -6,6 +6,7 @@ import { useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { api } from "../utils/api";
 import { formatBusinessDate, formatOperationTime, todayBusinessDate } from "../utils/date";
+import { exportToCsv } from "../utils/export";
 
 type Direction = "PURCHASE" | "SALE" | "UNKNOWN";
 type InvoiceType = "SPECIAL" | "ORDINARY" | "UNKNOWN";
@@ -37,6 +38,9 @@ const postingDate = ref(todayBusinessDate());
 const importErrors = ref<Array<{ fileName: string; code: string; message: string }>>([]);
 const importErrorsVisible = ref(false);
 const direction = ref<Direction | "">("");
+const keyword = ref("");
+const dateRange = ref<string[]>([]);
+const accStatus = ref<"" | "UNPOSTED" | "POSTED" | "REIMBURSING">("");
 const detailVisible = ref(false);
 const detailLoading = ref(false);
 const detail = ref<any>();
@@ -79,10 +83,53 @@ async function load(resetPage = false) {
   try {
     const query = new URLSearchParams({ page: String(page.value), pageSize: String(pageSize.value) });
     if (direction.value) query.set("direction", direction.value);
+    if (keyword.value.trim()) query.set("keyword", keyword.value.trim());
+    if (dateRange.value && dateRange.value.length === 2) {
+      query.set("startTime", new Date(`${dateRange.value[0]}T00:00:00+08:00`).toISOString());
+      query.set("endTime", new Date(`${dateRange.value[1]}T23:59:59.999+08:00`).toISOString());
+    }
     const data = await api.get<any>(`/invoices?${query}`);
-    rows.value = data.items;
-    total.value = data.total;
+    let items = data.items;
+    if (accStatus.value === "UNPOSTED") {
+      items = items.filter((r: any) => !r.voucherId && !r.reimbursementId && !linkedVoucherCount(r));
+    } else if (accStatus.value === "POSTED") {
+      items = items.filter((r: any) => Boolean(r.voucherId || linkedVoucherCount(r)));
+    } else if (accStatus.value === "REIMBURSING") {
+      items = items.filter((r: any) => Boolean(r.reimbursementId));
+    }
+    rows.value = items;
+    total.value = accStatus.value ? items.length : data.total;
   } finally { loading.value = false; }
+}
+
+function resetFilters() {
+  direction.value = "";
+  keyword.value = "";
+  dateRange.value = [];
+  accStatus.value = "";
+  void load(true);
+}
+
+function exportInvoices() {
+  if (!rows.value.length) {
+    ElMessage.warning("当前没有可导出的发票数据");
+    return;
+  }
+  const headers = ["开票日期", "发票号码", "发票类型", "销售方", "购买方", "不含税价", "税额", "价税合计", "方向", "入账状态"];
+  const exportRows = rows.value.map((r) => [
+    date(r.issueTime),
+    r.invoiceNumber,
+    invoiceTypeLabels[r.invoiceType as InvoiceType] ?? r.invoiceType,
+    r.sellerName,
+    r.buyerName,
+    money(r.totalAmountWithoutTax),
+    money(r.totalTaxAmount),
+    money(r.totalTaxIncludedAmount),
+    directionLabels[r.direction as Direction] ?? r.direction,
+    accountingStatus(r),
+  ]);
+  exportToCsv(`发票台账_${todayBusinessDate()}`, headers, exportRows);
+  ElMessage.success(`已导出发票台账 ${rows.value.length} 条数据`);
 }
 
 async function loadProfile() {
@@ -186,9 +233,7 @@ onMounted(async () => { await Promise.all([load(), loadProfile()]); });
     <section class="page-heading">
       <div><h2>电子发票</h2><p>XML 发票直接解析，支持多商品明细。</p></div>
       <div class="toolbar">
-        <el-select v-model="direction" clearable placeholder="全部方向" style="width: 120px" @change="load(true)">
-          <el-option label="进项" value="PURCHASE"/><el-option label="销项" value="SALE"/><el-option label="未识别" value="UNKNOWN"/>
-        </el-select>
+        <el-button @click="exportInvoices">导出 Excel</el-button>
         <el-button @click="openDocument">归档 OFD/PDF</el-button>
         <el-date-picker
           v-model="postingDate"
@@ -214,6 +259,38 @@ onMounted(async () => { await Promise.all([load(), loadProfile()]); });
         <el-button type="primary" :loading="uploading" :disabled="files.length === 0" @click="upload">批量导入</el-button>
       </div>
     </section>
+
+    <el-card shadow="never" class="filter-card">
+      <div class="filter-row">
+        <el-input
+          v-model="keyword"
+          clearable
+          placeholder="发票号码、对方名称或税号"
+          style="width: 230px"
+          @keyup.enter="load(true)"
+        />
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="开票起始"
+          end-placeholder="开票截止"
+          style="width: 240px"
+          @change="load(true)"
+        />
+        <el-select v-model="direction" clearable placeholder="全部方向" style="width: 120px" @change="load(true)">
+          <el-option label="进项" value="PURCHASE"/><el-option label="销项" value="SALE"/><el-option label="未识别" value="UNKNOWN"/>
+        </el-select>
+        <el-select v-model="accStatus" clearable placeholder="全部入账状态" style="width: 135px" @change="load(true)">
+          <el-option label="未入账" value="UNPOSTED"/>
+          <el-option label="已入账" value="POSTED"/>
+          <el-option label="报销中" value="REIMBURSING"/>
+        </el-select>
+        <el-button type="primary" @click="load(true)">查询</el-button>
+        <el-button @click="resetFilters">重置</el-button>
+      </div>
+    </el-card>
 
     <el-alert v-if="!profile" type="warning" :closable="false" show-icon>
       <template #title>尚未配置本企业统一社会信用代码，发票方向将显示为“未识别”。<el-button v-if="isAdmin" link type="primary" @click="openProfileSettings">前往设置</el-button></template>
@@ -337,6 +414,8 @@ onMounted(async () => { await Promise.all([load(), loadProfile()]); });
 </template>
 
 <style scoped>
+.filter-card { margin-bottom: 16px; }
+.filter-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 0; }
 .detail-title { margin: 24px 0 12px; font-size: 16px; }
 .source-heading { display: flex; align-items: center; justify-content: space-between; margin-top: 24px; }
 .source-heading .detail-title { margin: 0 0 12px; }

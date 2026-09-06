@@ -184,6 +184,11 @@ export class BankTransactionService {
     return transaction;
   }
 
+  async linkVoucher(id: number, voucherId: number, actorId: number) {
+    await this.repository.linkVoucher(id, voucherId, actorId);
+    return this.getById(id);
+  }
+
   private validateApiUrl(value: string): string {
     let url: URL;
     try {

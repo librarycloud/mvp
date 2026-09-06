@@ -1,12 +1,23 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { useRouter } from "vue-router";
 import { api } from "../utils/api";
-import { formatOperationTime } from "../utils/date";
+import { formatOperationTime, todayBusinessDate } from "../utils/date";
+import { exportToCsv } from "../utils/export";
 
 type PostingStatus = "UNPOSTED" | "VOUCHERED";
 type ReconciliationStatus = "UNMATCHED" | "PARTIAL" | "MATCHED";
 
+interface AccountOption {
+  id: number;
+  code: string;
+  name: string;
+  isLeaf: boolean;
+  isEnabled: boolean;
+}
+
+const router = useRouter();
 const rows = ref<any[]>([]);
 const total = ref(0);
 const loading = ref(false);
@@ -17,6 +28,7 @@ const cmbConfigSecretsConfigured = ref(false);
 const file = ref<File>();
 const page = ref(1);
 const pageSize = ref(20);
+const accounts = ref<AccountOption[]>([]);
 const filters = reactive({
   keyword: "",
   dateRange: [] as string[],
@@ -35,6 +47,18 @@ const cmbConfig = reactive({
   symKey: "",
 });
 
+const quickVoucherVisible = ref(false);
+const quickVoucherSaving = ref(false);
+const quickVoucherForm = reactive({
+  transactionId: 0,
+  voucherDate: "",
+  category: "PAYMENT" as "RECEIPT" | "PAYMENT",
+  summary: "",
+  bankAccountId: "" as number | "",
+  counterAccountId: "" as number | "",
+  amount: "0.00",
+});
+
 const postingLabels: Record<PostingStatus, string> = {
   UNPOSTED: "未入账",
   VOUCHERED: "已入账",
@@ -44,6 +68,17 @@ const reconciliationLabels: Record<ReconciliationStatus, string> = {
   PARTIAL: "部分匹配",
   MATCHED: "已匹配",
 };
+
+function formatMoney(val: unknown) {
+  const num = Number(val ?? 0);
+  const prefix = num > 0 ? "+" : "";
+  return prefix + num.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatBalance(val: unknown) {
+  if (val === null || val === undefined || val === "") return "-";
+  return Number(val).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 function buildQuery() {
   const query = new URLSearchParams({ page: String(page.value), pageSize: String(pageSize.value) });
@@ -69,9 +104,100 @@ async function load(resetPage = false) {
   }
 }
 
+async function loadAccounts() {
+  try {
+    const res = await api.get<AccountOption[]>("/accounts?tree=false&isEnabled=true");
+    accounts.value = res.filter((a) => a.isLeaf && a.isEnabled);
+  } catch { /* ignored */ }
+}
+
 function resetFilters() {
   Object.assign(filters, { keyword: "", dateRange: [], voucherStatus: "", reconciliationStatus: "" });
   load(true);
+}
+
+function viewVoucher(voucherId: number) {
+  router.push({ path: "/vouchers", query: { voucherId: String(voucherId) } });
+}
+
+function openQuickVoucher(row: any) {
+  const isPositive = Number(row.amount) >= 0;
+  const absAmount = Math.abs(Number(row.amount)).toFixed(2);
+  const defaultBank = accounts.value.find((a) => a.code.startsWith("1002") && a.isLeaf) || accounts.value.find((a) => a.code.startsWith("1001") && a.isLeaf);
+  const defaultCounter = isPositive
+    ? accounts.value.find((a) => a.code.startsWith("1122") || a.code.startsWith("6001"))
+    : accounts.value.find((a) => a.code.startsWith("6602") || a.code.startsWith("2202"));
+
+  quickVoucherForm.transactionId = row.id;
+  quickVoucherForm.voucherDate = row.transactionTime ? row.transactionTime.slice(0, 10) : todayBusinessDate();
+  quickVoucherForm.category = isPositive ? "RECEIPT" : "PAYMENT";
+  quickVoucherForm.summary = row.summary || (isPositive ? `收到 ${row.payerName || "银行转入款"}` : `支付 ${row.payeeName || "银行转出款"}`);
+  quickVoucherForm.bankAccountId = defaultBank?.id ?? "";
+  quickVoucherForm.counterAccountId = defaultCounter?.id ?? "";
+  quickVoucherForm.amount = absAmount;
+  quickVoucherVisible.value = true;
+}
+
+async function submitQuickVoucher() {
+  if (!quickVoucherForm.bankAccountId || !quickVoucherForm.counterAccountId) {
+    ElMessage.warning("请完整选择银行科目和对应业务科目");
+    return;
+  }
+  if (!quickVoucherForm.summary.trim()) {
+    ElMessage.warning("请输入凭证摘要");
+    return;
+  }
+  quickVoucherSaving.value = true;
+  try {
+    const isReceipt = quickVoucherForm.category === "RECEIPT";
+    const bankEntry = {
+      accountId: quickVoucherForm.bankAccountId,
+      summary: quickVoucherForm.summary,
+      debitAmount: isReceipt ? quickVoucherForm.amount : "0",
+      creditAmount: isReceipt ? "0" : quickVoucherForm.amount,
+    };
+    const counterEntry = {
+      accountId: quickVoucherForm.counterAccountId,
+      summary: quickVoucherForm.summary,
+      debitAmount: isReceipt ? "0" : quickVoucherForm.amount,
+      creditAmount: isReceipt ? quickVoucherForm.amount : "0",
+    };
+    const voucherPayload = {
+      voucherDate: quickVoucherForm.voucherDate,
+      summary: quickVoucherForm.summary,
+      category: quickVoucherForm.category,
+      entries: [bankEntry, counterEntry],
+    };
+    const voucher = await api.post<any>("/vouchers", voucherPayload);
+    await api.post(`/bank-transactions/${quickVoucherForm.transactionId}/vouchers`, { voucherId: voucher.id });
+    ElMessage.success(`凭证 ${voucher.voucherNo} 已生成并成功关联流水入账`);
+    quickVoucherVisible.value = false;
+    await load();
+  } finally {
+    quickVoucherSaving.value = false;
+  }
+}
+
+function exportTransactions() {
+  if (!rows.value.length) {
+    ElMessage.warning("当前没有可导出的流水数据");
+    return;
+  }
+  const headers = ["交易时间", "流水号", "付方", "收方", "摘要", "金额", "余额", "入账状态", "关联凭证", "对账状态"];
+  const exportRows = rows.value.map((r) => [
+    formatOperationTime(r.transactionTime),
+    r.transactionNo,
+    r.payerName ?? "",
+    r.payeeName ?? "",
+    r.summary ?? "",
+    r.amount,
+    r.balance ?? "",
+    postingLabels[r.postingStatus as PostingStatus] ?? r.postingStatus,
+    r.voucher?.voucherNo ?? "",
+    reconciliationLabels[r.reconciliationStatus as ReconciliationStatus] ?? r.reconciliationStatus,
+  ]);
+  exportToCsv(`银行流水_${todayBusinessDate()}`, headers, exportRows);
+  ElMessage.success(`已导出 ${rows.value.length} 条银行流水数据`);
 }
 
 async function upload() {
@@ -164,14 +290,19 @@ async function restoreCmbConfig() {
   } catch { /* The error is already presented by the API client. */ }
 }
 
-onMounted(() => { void restoreCmbConfig(); void load(); });
+onMounted(() => {
+  void restoreCmbConfig();
+  void load();
+  void loadAccounts();
+});
 </script>
 
 <template>
   <div class="page-grid">
     <section class="page-heading">
-      <div><h2>银行流水</h2><p>可从招商银行接口获取流水，也可导入 xlsx 或 csv 文件。</p></div>
+      <div><h2>银行流水</h2><p>可从招商银行接口获取流水，也可导入 xlsx 或 csv 文件，支持凭证穿透与一键生成凭证。</p></div>
       <div class="toolbar">
+        <el-button @click="exportTransactions">导出 Excel</el-button>
         <el-button type="primary" plain @click="fetchDialogVisible = true">招商银行接口拉取</el-button>
         <el-upload
           :auto-upload="false"
@@ -206,7 +337,7 @@ onMounted(() => { void restoreCmbConfig(); void load(); });
           v-model="filters.keyword"
           clearable
           placeholder="流水号、对方名称或摘要"
-          style="width: 250px"
+          style="width: 230px"
           @keyup.enter="load(true)"
         />
         <el-date-picker
@@ -216,13 +347,13 @@ onMounted(() => { void restoreCmbConfig(); void load(); });
           range-separator="至"
           start-placeholder="开始日期"
           end-placeholder="结束日期"
-          style="width: 250px"
+          style="width: 240px"
         />
-        <el-select v-model="filters.voucherStatus" clearable placeholder="全部入账状态" style="width: 145px">
+        <el-select v-model="filters.voucherStatus" clearable placeholder="全部入账状态" style="width: 140px">
           <el-option label="未入账" value="UNPOSTED"/>
           <el-option label="已入账" value="VOUCHERED"/>
         </el-select>
-        <el-select v-model="filters.reconciliationStatus" clearable placeholder="全部对账状态" style="width: 145px">
+        <el-select v-model="filters.reconciliationStatus" clearable placeholder="全部对账状态" style="width: 140px">
           <el-option label="未对账" value="UNMATCHED"/>
           <el-option label="已有匹配" value="MATCHED"/>
         </el-select>
@@ -238,12 +369,29 @@ onMounted(() => { void restoreCmbConfig(); void load(); });
         <el-table-column prop="payerName" label="付方" min-width="150" show-overflow-tooltip/>
         <el-table-column prop="payeeName" label="收方" min-width="150" show-overflow-tooltip/>
         <el-table-column prop="summary" label="摘要" min-width="160" show-overflow-tooltip/>
-        <el-table-column prop="amount" label="金额" align="right" width="120"/>
-        <el-table-column prop="balance" label="余额" align="right" width="120"><template #default="{ row }">{{ row.balance ?? "-" }}</template></el-table-column>
-        <el-table-column label="入账" width="120">
+        <el-table-column label="金额" align="right" width="130">
+          <template #default="{ row }">
+            <span :class="Number(row.amount) >= 0 ? 'amount-in' : 'amount-out'">
+              {{ formatMoney(row.amount) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="余额" align="right" width="130">
+          <template #default="{ row }">{{ formatBalance(row.balance) }}</template>
+        </el-table-column>
+        <el-table-column label="入账" width="130">
           <template #default="{ row }">
             <el-tag :type="row.postingStatus === 'VOUCHERED' ? 'success' : 'info'">{{ postingLabels[row.postingStatus as PostingStatus] }}</el-tag>
-            <div v-if="row.voucher" class="voucher-no">{{ row.voucher.voucherNo }}</div>
+            <div v-if="row.voucher" class="voucher-link">
+              <el-button link type="primary" size="small" @click="viewVoucher(row.voucher.id)">
+                {{ row.voucher.voucherNo }}
+              </el-button>
+            </div>
+            <div v-else-if="row.postingStatus === 'UNPOSTED'" class="voucher-link">
+              <el-button link type="primary" size="small" @click="openQuickVoucher(row)">
+                + 生成凭证
+              </el-button>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="对账" width="110">
@@ -256,11 +404,58 @@ onMounted(() => { void restoreCmbConfig(); void load(); });
       </el-table>
       <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load()"/>
     </el-card>
+
+    <!-- 一键生成凭证对话框 -->
+    <el-dialog v-model="quickVoucherVisible" title="基于银行流水生成凭证" width="560px" destroy-on-close>
+      <el-form label-width="110px">
+        <el-form-item label="凭证日期" required>
+          <el-date-picker v-model="quickVoucherForm.voucherDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="凭证类别" required>
+          <el-select v-model="quickVoucherForm.category" style="width: 100%">
+            <el-option label="收款凭证" value="RECEIPT" />
+            <el-option label="付款凭证" value="PAYMENT" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="凭证摘要" required>
+          <el-input v-model="quickVoucherForm.summary" placeholder="凭证主摘要" />
+        </el-form-item>
+        <el-form-item label="银行科目" required>
+          <el-select v-model="quickVoucherForm.bankAccountId" filterable placeholder="选择银行科目" style="width: 100%">
+            <el-option
+              v-for="acc in accounts.filter(a => a.code.startsWith('1001') || a.code.startsWith('1002'))"
+              :key="acc.id"
+              :label="`${acc.code} ${acc.name}`"
+              :value="acc.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="对应业务科目" required>
+          <el-select v-model="quickVoucherForm.counterAccountId" filterable placeholder="选择对方业务科目" style="width: 100%">
+            <el-option
+              v-for="acc in accounts"
+              :key="acc.id"
+              :label="`${acc.code} ${acc.name}`"
+              :value="acc.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="发生金额">
+          <el-input v-model="quickVoucherForm.amount" disabled>
+            <template #prefix>¥</template>
+          </el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="quickVoucherVisible = false">取消</el-button>
+        <el-button type="primary" :loading="quickVoucherSaving" @click="submitQuickVoucher">确认生成并入账</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.filter-row { margin-bottom: 0; }
+.filter-row { margin-bottom: 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .card-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
 .card-title h3 { margin: 0 0 4px; font-size: 16px; }
 .card-title p { margin: 0; color: #667085; font-size: 13px; }
@@ -284,6 +479,8 @@ onMounted(() => { void restoreCmbConfig(); void load(); });
   :deep(.cmb-dialog .el-dialog__footer) { display: flex; flex-wrap: wrap; gap: 8px; }
   :deep(.cmb-dialog .el-dialog__footer .el-button) { flex: 1 1 100%; margin: 0; }
 }
-.voucher-no { margin-top: 4px; color: #667085; font-size: 12px; }
+.voucher-link { margin-top: 4px; }
+.amount-in { color: #16a34a; font-weight: 600; }
+.amount-out { color: #dc2626; font-weight: 600; }
 .cmb-help { grid-column: 1 / -1; margin: 0 0 8px; color: #667085; font-size: 12px; }
 </style>

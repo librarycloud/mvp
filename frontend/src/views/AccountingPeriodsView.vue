@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
@@ -47,6 +47,10 @@ async function reopen(row: Period) {
   await api.post(`/accounting-periods/${row.id}/reopen`); ElMessage.success('已反关账'); await load();
 }
 function date(value: string | null) { return value ? value.slice(0, 10) : '-'; }
+function handleCheckRoute(path: string) {
+  checklistVisible.value = false;
+  router.push(path);
+}
 onMounted(load);
 </script>
 
@@ -81,6 +85,6 @@ onMounted(load);
       <el-alert type="info" :closable="false" title="期间编号与日期范围相互独立，可设置跨月范围；日期范围不能与其他期间重叠。" />
       <template #footer><el-button @click="editVisible = false">取消</el-button><el-button type="primary" :disabled="!editForm.startDate || !editForm.endDate" @click="updatePeriod">保存</el-button></template>
     </el-dialog>
-    <el-drawer v-model="checklistVisible" :title="`${checklistPeriod?.periodCode ?? ''} 月结检查`" size="560px"><el-alert :type="checklist.ready?'success':'error'" :title="checklist.ready?'可以关账':'存在阻断项，暂不能关账'" :closable="false"/><el-table :data="checklist.checks" class="close-checks"><el-table-column prop="name" label="检查项目"/><el-table-column label="结果" width="90"><template #default="{row}"><el-tag :type="row.level==='PASS'?'success':row.level==='WARN'?'warning':'danger'">{{row.level==='PASS'?'通过':row.level==='WARN'?'提醒':'阻断'}}</el-tag></template></el-table-column><el-table-column prop="message" label="说明"/><el-table-column label="操作" width="80"><template #default="{row}"><el-button v-if="row.route&&row.level!=='PASS'" text type="primary" @click="router.push(row.route)">处理</el-button></template></el-table-column></el-table><template #footer><el-button v-if="checklistPeriod" @click="inspect(checklistPeriod)">重新检查</el-button><el-button v-if="checklist.ready&&checklistPeriod" type="primary" @click="closePeriod(checklistPeriod)">确认关账</el-button></template></el-drawer>
+    <el-drawer v-model="checklistVisible" :title="`${checklistPeriod?.periodCode ?? ''} 月结检查`" size="580px"><el-alert :type="checklist.ready?'success':'error'" :title="checklist.ready?'可以关账':'存在阻断项，暂不能关账'" :closable="false"/><el-table :data="checklist.checks" class="close-checks"><el-table-column prop="name" label="检查项目"/><el-table-column label="结果" width="90"><template #default="{row}"><el-tag :type="row.level==='PASS'?'success':row.level==='WARN'?'warning':'danger'">{{row.level==='PASS'?'通过':row.level==='WARN'?'提醒':'阻断'}}</el-tag></template></el-table-column><el-table-column prop="message" label="说明"/><el-table-column label="操作" width="90"><template #default="{row}"><el-button v-if="row.route&&row.level!=='PASS'" link type="primary" @click="handleCheckRoute(row.route)">处理 →</el-button></template></el-table-column></el-table><template #footer><el-button v-if="checklistPeriod" @click="inspect(checklistPeriod)">重新检查</el-button><el-button v-if="checklist.ready&&checklistPeriod" type="primary" @click="closePeriod(checklistPeriod)">确认关账</el-button></template></el-drawer>
   </div>
 </template>

@@ -8,6 +8,7 @@ import { formatBusinessDate, formatOperationTime, todayBusinessDate } from "../u
 import { numberToChineseAmount } from "../utils/chinese-amount";
 import { matchPinyin, getPinyinInitials } from "../utils/pinyin";
 import VoucherPrintModal from "../components/VoucherPrintModal.vue";
+import { exportToCsv } from "../utils/export";
 
 const VOUCHER_STATUS = { DRAFT: 0, PENDING: 1, POSTED: 2, VOID: 3 } as const;
 const PERIOD_STATUS = { OPEN: 0, CLOSED: 1, LOCKED: 2 } as const;
@@ -30,6 +31,7 @@ const rows = ref<any[]>([]);
 const selectedRows = ref<any[]>([]);
 const accounts = ref<AccountOption[]>([]);
 const dimensions = ref<any[]>([]);
+const periods = ref<any[]>([]);
 const loading = ref(false);
 const accountsLoading = ref(false);
 const visible = ref(false);
@@ -40,6 +42,9 @@ const printTarget = ref<any>();
 const editingId = ref<number | "">("");
 const status = ref<Status | "">("");
 const category = ref<VoucherCategory | "">("");
+const periodId = ref<number | "">("");
+const dateRange = ref<string[]>([]);
+const keyword = ref("");
 const categoryManuallySelected = ref(false);
 const currentPeriodLocked = ref(false);
 const accountFilterQuery = ref("");
@@ -109,19 +114,58 @@ async function load(resetPage = false) {
     const query = new URLSearchParams({ page: String(page.value), pageSize: String(pageSize.value) });
     if (status.value !== "") query.set("status", String(status.value));
     if (category.value !== "") query.set("category", category.value);
-    const [data, periods] = await Promise.all([
+    if (periodId.value !== "") query.set("periodId", String(periodId.value));
+    if (keyword.value.trim()) query.set("keyword", keyword.value.trim());
+    if (dateRange.value && dateRange.value.length === 2) {
+      query.set("startDate", dateRange.value[0]);
+      query.set("endDate", dateRange.value[1]);
+    }
+    const [data, periodList] = await Promise.all([
       api.get<any>(`/vouchers?${query}`),
       api.get<any[]>("/accounting-periods"),
     ]);
     rows.value = data.items;
     total.value = data.total;
+    periods.value = periodList;
     selectedRows.value = [];
     const today = todayBusinessDate();
-    const current = periods.find((period) => period.startDate.slice(0, 10) <= today && period.endDate.slice(0, 10) >= today);
+    const current = periodList.find((period) => period.startDate.slice(0, 10) <= today && period.endDate.slice(0, 10) >= today);
     currentPeriodLocked.value = Boolean(current && current.status !== PERIOD_STATUS.OPEN);
   } finally {
     loading.value = false;
   }
+}
+
+function resetFilters() {
+  status.value = "";
+  category.value = "";
+  periodId.value = "";
+  dateRange.value = [];
+  keyword.value = "";
+  void load(true);
+}
+
+function exportVouchers() {
+  const exportData = selectedRows.value.length ? selectedRows.value : rows.value;
+  if (!exportData.length) {
+    ElMessage.warning("当前列表没有可导出的凭证");
+    return;
+  }
+  const headers = ["凭证号", "凭证日期", "入账日期", "凭证类别", "摘要", "借方金额", "贷方金额", "状态", "审核人", "记账人"];
+  const exportRows = exportData.map((v) => [
+    v.voucherNo,
+    formatBusinessDate(v.voucherDate),
+    formatBusinessDate(v.postingDate),
+    categoryLabels[v.category as VoucherCategory] ?? v.category,
+    v.summary,
+    v.totalDebit,
+    v.totalCredit,
+    labels[v.status as Status] ?? v.status,
+    v.reviewer?.displayName ?? "-",
+    v.postedBy?.displayName ?? "-",
+  ]);
+  exportToCsv(`会计凭证_${todayBusinessDate()}`, headers, exportRows);
+  ElMessage.success(`已导出 ${exportData.length} 条凭证数据`);
 }
 
 async function loadAccounts() {
@@ -154,6 +198,46 @@ function addEntry() {
     creditAmount: "0",
     dimensionMemberIds: [],
   });
+}
+
+function insertEntryAfter(index: number) {
+  const currentSummary = form.entries[index]?.summary || form.summary;
+  form.entries.splice(index + 1, 0, {
+    accountId: "" as number | "",
+    summary: currentSummary,
+    debitAmount: "0",
+    creditAmount: "0",
+    dimensionMemberIds: [],
+  });
+}
+
+function clickAutoBalance() {
+  if (isBalanced.value) return;
+  const diff = balanceDiff.value;
+  if (Math.abs(diff) < 0.0001) return;
+  const neededSide = diff > 0 ? "credit" : "debit";
+  const neededAmount = Math.abs(diff).toFixed(2);
+
+  const emptyEntry = form.entries.find((e) => (Number(e.debitAmount) === 0 || !e.debitAmount) && (Number(e.creditAmount) === 0 || !e.creditAmount));
+  if (emptyEntry) {
+    if (neededSide === "credit") {
+      emptyEntry.creditAmount = neededAmount;
+      emptyEntry.debitAmount = "0";
+    } else {
+      emptyEntry.debitAmount = neededAmount;
+      emptyEntry.creditAmount = "0";
+    }
+  } else {
+    const lastSummary = form.entries[form.entries.length - 1]?.summary || form.summary;
+    form.entries.push({
+      accountId: "" as number | "",
+      summary: lastSummary,
+      debitAmount: neededSide === "debit" ? neededAmount : "0",
+      creditAmount: neededSide === "credit" ? neededAmount : "0",
+      dimensionMemberIds: [],
+    });
+  }
+  ElMessage.success("已自动计算并填平借贷差额");
 }
 
 function removeEntry(index: number) {
@@ -348,6 +432,12 @@ function closeDetail() {
 }
 
 onMounted(async () => {
+  if (route.query.status !== undefined && route.query.status !== "") {
+    status.value = Number(route.query.status) as Status;
+  }
+  if (route.query.keyword) {
+    keyword.value = String(route.query.keyword);
+  }
   await Promise.all([load(), loadAccounts()]);
   const voucherId = Number(route.query.voucherId);
   if (Number.isInteger(voucherId) && voucherId > 0) await showDetail(voucherId);
@@ -362,12 +452,6 @@ onMounted(async () => {
         <p>凭证审核通过并记账后进入账簿和报表。支持负数红字冲销、键盘快捷找平与标准凭证套打。</p>
       </div>
       <div class="toolbar">
-        <el-select v-model="status" clearable placeholder="全部状态" style="width:130px" @change="load(true)">
-          <el-option v-for="(label, key) in labels" :key="key" :label="label" :value="key" />
-        </el-select>
-        <el-select v-model="category" clearable placeholder="全部类别" style="width:120px" @change="load(true)">
-          <el-option v-for="(label, key) in categoryLabels" :key="key" :label="label" :value="key" />
-        </el-select>
         <template v-if="selectedRows.length">
           <el-button @click="batch('submit')">批量提交</el-button>
           <el-button v-if="isAdmin" @click="batch('review')">批量审核</el-button>
@@ -377,6 +461,40 @@ onMounted(async () => {
         <el-button type="primary" :disabled="currentPeriodLocked" @click="openCreate">新增凭证</el-button>
       </div>
     </section>
+
+    <el-card shadow="never" class="filter-card">
+      <div class="filter-row">
+        <el-select v-model="periodId" clearable placeholder="全部期间" style="width:130px" @change="load(true)">
+          <el-option v-for="p in periods" :key="p.id" :label="p.periodCode" :value="p.id" />
+        </el-select>
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          style="width:230px"
+          @change="load(true)"
+        />
+        <el-input
+          v-model="keyword"
+          clearable
+          placeholder="凭证号或摘要"
+          style="width:180px"
+          @keyup.enter="load(true)"
+        />
+        <el-select v-model="status" clearable placeholder="全部状态" style="width:120px" @change="load(true)">
+          <el-option v-for="(label, key) in labels" :key="key" :label="label" :value="Number(key)" />
+        </el-select>
+        <el-select v-model="category" clearable placeholder="全部类别" style="width:110px" @change="load(true)">
+          <el-option v-for="(label, key) in categoryLabels" :key="key" :label="label" :value="key" />
+        </el-select>
+        <el-button type="primary" @click="load(true)">查询</el-button>
+        <el-button @click="resetFilters">重置</el-button>
+        <el-button @click="exportVouchers">导出 Excel</el-button>
+      </div>
+    </el-card>
 
     <el-card shadow="never">
       <el-table table-layout="auto" v-loading="loading" :data="rows" stripe @selection-change="selectedRows = $event">
@@ -511,13 +629,15 @@ onMounted(async () => {
             </el-option-group>
           </el-select>
 
-          <el-button link type="danger" @click="removeEntry(index)" :disabled="form.entries.length <= 2">
-            删除
-          </el-button>
+          <div class="row-actions">
+            <el-button link type="primary" @click="insertEntryAfter(index)">插入</el-button>
+            <el-button link type="danger" @click="removeEntry(index)" :disabled="form.entries.length <= 2">删除</el-button>
+          </div>
         </div>
 
         <div class="entry-actions">
           <el-button text type="primary" @click="addEntry">+ 增加分录 (或在贷方回车)</el-button>
+          <el-button v-if="!isBalanced" type="warning" plain size="small" @click="clickAutoBalance">⚖️ 一键自动找平</el-button>
         </div>
 
         <!-- 实时借贷平衡与大写金额状态条 -->
@@ -533,6 +653,7 @@ onMounted(async () => {
               差额：{{ balanceDiff.toFixed(2) }} (借贷不平)
             </span>
             <span v-else class="diff-tag balanced">借贷平衡</span>
+            <el-button v-if="!isBalanced" type="warning" size="small" style="margin-left: 8px;" @click="clickAutoBalance">自动找平</el-button>
           </div>
         </div>
       </el-form>
@@ -548,8 +669,9 @@ onMounted(async () => {
     <!-- 凭证详情抽屉 -->
     <el-drawer v-model="detailVisible" title="凭证详情" size="70%" @closed="closeDetail">
       <template v-if="detail">
-        <div class="detail-toolbar" style="margin-bottom: 16px;">
+        <div class="detail-toolbar" style="margin-bottom: 16px; display: flex; gap: 8px;">
           <el-button type="primary" @click="openPrint(detail)">打印标准记账凭证</el-button>
+          <el-button @click="openCopy(detail)">以此凭证为模板复制</el-button>
         </div>
 
         <el-descriptions :column="3" border>
@@ -642,9 +764,19 @@ onMounted(async () => {
 .entry-head,
 .entry-row {
   display: grid;
-  grid-template-columns: 1.3fr 1fr 0.8fr 0.8fr 1fr 48px;
+  grid-template-columns: 1.3fr 1fr 0.8fr 0.8fr 1fr 88px;
   gap: 8px;
   align-items: center;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.filter-card {
+  margin-bottom: 16px;
 }
 
 .entry-head {

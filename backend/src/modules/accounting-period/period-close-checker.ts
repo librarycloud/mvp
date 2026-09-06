@@ -53,7 +53,7 @@ export class PrismaPeriodCloseChecker implements AccountingPeriodCloseChecker {
     ).length;
     const checks: CloseCheckItem[] = [
       this.item("PRIOR_PERIOD", "前序期间关账", priorOpenPeriod ? "BLOCK" : "PASS", priorOpenPeriod ? 1 : 0, priorOpenPeriod ? `前序会计期间（${priorOpenPeriod.periodCode}）尚未关账` : "前序会计期间均已关账", "/accounting-periods"),
-      this.item("VOUCHERS", "凭证审核记账", pendingVouchers ? "BLOCK" : "PASS", pendingVouchers, pendingVouchers ? `有 ${pendingVouchers} 张草稿或待审核凭证` : "本期凭证均已处理", "/vouchers"),
+      this.item("VOUCHERS", "凭证审核记账", pendingVouchers ? "BLOCK" : "PASS", pendingVouchers, pendingVouchers ? `有 ${pendingVouchers} 张草稿或待审核凭证` : "本期凭证均已处理", `/vouchers?periodId=${period.id}`),
       this.item("TRIAL_BALANCE", "试算平衡", debit.equals(credit) ? "PASS" : "BLOCK", debit.equals(credit) ? 0 : 1, debit.equals(credit) ? "借贷发生额平衡" : `借方 ${debit.toString()}，贷方 ${credit.toString()}`, "/ledgers"),
       this.item("PROFIT_LOSS", "损益结转", unclosedProfitLossCount ? "WARN" : "PASS", unclosedProfitLossCount, unclosedProfitLossCount ? `有 ${unclosedProfitLossCount} 个损益类科目期末余额未结平，建议结转损益` : "损益类科目已结平或无余额", "/year-end-closing"),
       this.item("BANK", "银行对账", unmatchedBank || incompleteReconciliations ? "BLOCK" : "PASS", unmatchedBank + incompleteReconciliations, unmatchedBank || incompleteReconciliations ? `未匹配流水 ${unmatchedBank} 条，未完成对账单 ${incompleteReconciliations} 张` : "银行流水和对账单已处理", "/bank-reconciliations"),
