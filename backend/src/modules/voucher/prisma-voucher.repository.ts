@@ -3,6 +3,7 @@ import { AppError } from "../../common/errors/app-error.js";
 import { AI_SUGGESTION_STATUS, VOUCHER_STATUS } from "../../common/status-codes.js";
 import type { VoucherRepository } from "./voucher.repository.js";
 import { voucherDetailInclude, voucherFilterWhere } from "./voucher-prisma.helpers.js";
+import { getNextVoucherNumber } from "./voucher-numbering.helper.js";
 import type {
   AiSuggestionForVoucher,
   VoucherActor,
@@ -83,7 +84,7 @@ export class PrismaVoucherRepository implements VoucherRepository {
   createManual(data: VoucherWriteData, actor: VoucherActor) {
     return this.prisma.$transaction(async (tx) => {
       await this.assertDimensions(tx, data.entries);
-      const numbering = await this.nextNumber(tx, data.fiscalYear);
+      const numbering = await getNextVoucherNumber(tx, data.fiscalYear);
       const voucher = await tx.voucher.create({
         data: this.createData(data, numbering, "MANUAL", actor.actorId),
         include: voucherDetailInclude(),
@@ -108,7 +109,7 @@ export class PrismaVoucherRepository implements VoucherRepository {
       if (claimed.count !== 1) {
         throw new AppError("AI_SUGGESTION_STATE_INVALID", "AI 建议已处理或状态无效", 409);
       }
-      const numbering = await this.nextNumber(tx, data.fiscalYear);
+      const numbering = await getNextVoucherNumber(tx, data.fiscalYear);
       const sourceType = suggestion.bankTransactionId && suggestion.invoiceId
         ? "MIXED"
         : suggestion.bankTransactionId
@@ -284,18 +285,6 @@ export class PrismaVoucherRepository implements VoucherRepository {
       await tx.auditLog.create({ data: this.audit("UPDATE", current.id, `Voucher status: ${current.status} -> ${to}`, actor, { fromStatus: current.status, toStatus: to, voidReason: voidReason ?? null }) });
       return tx.voucher.findUniqueOrThrow({ where: { id: current.id }, include: voucherDetailInclude() });
     });
-  }
-
-  private async nextNumber(tx: Prisma.TransactionClient, year: number) {
-    await tx.$executeRaw`INSERT IGNORE INTO voucher_sequences (fiscal_year,next_value,created_at,updated_at,deleted_at) VALUES (${year},1,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3),NULL)`;
-    const rows = await tx.$queryRaw<Array<{ next_value: number }>>`
-      SELECT next_value FROM voucher_sequences WHERE fiscal_year = ${year} FOR UPDATE`;
-    const sequenceNo = Number(rows[0]?.next_value);
-    if (!Number.isSafeInteger(sequenceNo) || sequenceNo < 1 || sequenceNo > 999999) {
-      throw new AppError("VOUCHER_SEQUENCE_EXHAUSTED", `${year}年度凭证序号不可用`, 409);
-    }
-    await tx.voucherSequence.update({ where: { fiscalYear: year }, data: { nextValue: sequenceNo + 1 } });
-    return { sequenceNo, voucherNo: `${year}-${String(sequenceNo).padStart(6, "0")}` };
   }
 
   private createData(

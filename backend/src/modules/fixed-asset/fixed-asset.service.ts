@@ -4,6 +4,7 @@ import { canEditAccounting } from "../../common/auth/authorization.js";
 import { FIXED_ASSET_STATUS } from "../../common/status-codes.js";
 import type { AuthRole } from "../auth/auth.types.js";
 import type { AccountingPeriodResolver } from "../accounting-period/accounting-period.types.js";
+import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
 import { VOUCHER_STATUS } from "../../common/status-codes.js";
 
 type Actor = { actorId: number; role: AuthRole };
@@ -75,7 +76,21 @@ export class FixedAssetService {
       if (asset.status !== FIXED_ASSET_STATUS.ACTIVE && asset.status !== FIXED_ASSET_STATUS.INACTIVE) throw new AppError("FIXED_ASSET_FINALIZED", "该资产已处置，不能重复处置", 409);
       if (asset.disposals.length) throw new AppError("FIXED_ASSET_DISPOSAL_EXISTS", "该资产已有处置记录", 409);
       if (date < asset.purchaseDate) throw new AppError("INVALID_DISPOSAL_DATE", "处置日期不能早于购买日期", 400);
-      const accumulated = Prisma.Decimal.min(asset.originalValue, Prisma.Decimal.max(ZERO, asset.accumulatedDepreciation));
+      let initialAcc = Prisma.Decimal.min(asset.originalValue, Prisma.Decimal.max(ZERO, asset.accumulatedDepreciation));
+      const existingDepr = await tx.depreciationRecord.findUnique({
+        where: { assetId_periodId: { assetId: asset.id, periodId: period.id } },
+      });
+      let periodDeprAmount = ZERO;
+      if (!existingDepr && asset.depreciationMethod === "STRAIGHT_LINE" && asset.startUseDate < period.startDate) {
+        const depreciable = asset.originalValue.minus(asset.residualValue);
+        const remaining = depreciable.minus(initialAcc);
+        if (remaining.greaterThan(0)) {
+          const monthly = depreciable.div(asset.usefulLifeMonths).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+          const postableRemaining = remaining.decimalPlaces() <= 2 ? remaining : remaining.toDecimalPlaces(2, Prisma.Decimal.ROUND_DOWN);
+          periodDeprAmount = Prisma.Decimal.min(monthly, postableRemaining);
+        }
+      }
+      const accumulated = initialAcc.plus(periodDeprAmount);
       const netBookValue = asset.originalValue.minus(accumulated);
       const gainLoss = proceeds.minus(netBookValue);
       const codes = await tx.account.findMany({ where: { code: { in: ["1601", "1602", "1606", "6115"] }, deletedAt: null, isEnabled: true, isLeaf: true }, select: { id: true, code: true, category: true } });
@@ -89,6 +104,20 @@ export class FixedAssetService {
       const summary = `固定资产${disposalType === "SALE" ? "出售" : "报废"}：${asset.assetNo} ${asset.name}`;
       const entries: any[] = [];
       let lineNo = 1;
+      if (periodDeprAmount.greaterThan(0)) {
+        const deprExpenseAccountId = asset.depreciationExpenseAccountId ?? (await tx.account.findFirst({ where: { code: { startsWith: "6602" }, deletedAt: null, isEnabled: true, isLeaf: true }, select: { id: true } }))?.id ?? gainLossAccountId;
+        entries.push({ lineNo: lineNo++, accountId: deprExpenseAccountId, summary: `处置当月计提折旧：${asset.assetNo} ${asset.name}`, debitAmount: periodDeprAmount, creditAmount: ZERO });
+        entries.push({ lineNo: lineNo++, accountId: accumulatedAccountId, summary: `处置当月计提折旧：${asset.assetNo} ${asset.name}`, debitAmount: ZERO, creditAmount: periodDeprAmount });
+        await tx.depreciationRecord.create({
+          data: {
+            assetId: id,
+            periodId: period.id,
+            amount: periodDeprAmount,
+            status: 2,
+            createdById: actor.actorId,
+          },
+        });
+      }
       entries.push({ lineNo: lineNo++, accountId: clearingAccountId, summary, debitAmount: asset.originalValue, creditAmount: ZERO });
       entries.push({ lineNo: lineNo++, accountId: fixedAssetAccountId, summary, debitAmount: ZERO, creditAmount: asset.originalValue });
       if (accumulated.greaterThan(0)) entries.push({ lineNo: lineNo++, accountId: accumulatedAccountId, summary, debitAmount: accumulated, creditAmount: ZERO });
@@ -97,7 +126,7 @@ export class FixedAssetService {
       if (clearingCredit.greaterThan(0)) entries.push({ lineNo: lineNo++, accountId: clearingAccountId, summary, debitAmount: ZERO, creditAmount: clearingCredit });
       if (gainLoss.greaterThan(0)) entries.push({ lineNo: lineNo++, accountId: clearingAccountId, summary, debitAmount: gainLoss, creditAmount: ZERO }, { lineNo: lineNo++, accountId: gainLossAccountId, summary, debitAmount: ZERO, creditAmount: gainLoss });
       else if (gainLoss.lessThan(0)) { const loss = gainLoss.abs(); entries.push({ lineNo: lineNo++, accountId: gainLossAccountId, summary, debitAmount: loss, creditAmount: ZERO }, { lineNo: lineNo++, accountId: clearingAccountId, summary, debitAmount: ZERO, creditAmount: loss }); }
-      const sequence = await this.nextNumber(tx, period.year);
+      const sequence = await getNextVoucherNumber(tx, period.year);
       const total = entries.reduce((sum, entry) => sum.plus(entry.debitAmount), ZERO);
       const voucher = await tx.voucher.create({ data: { ...sequence, fiscalYear: period.year, fiscalPeriod: period.month, voucherDate: date, postingDate: date, periodId: period.id, summary, sourceType: "MANUAL", status: VOUCHER_STATUS.POSTED, totalDebit: total, totalCredit: total, createdById: actor.actorId, reviewerId: actor.actorId, reviewedAt: new Date(), postedById: actor.actorId, postedAt: new Date(), entries: { create: entries } } });
       await tx.fixedAsset.update({ where: { id }, data: { status: disposalType === "SALE" ? FIXED_ASSET_STATUS.SOLD : FIXED_ASSET_STATUS.DISCARDED } });
@@ -112,13 +141,6 @@ export class FixedAssetService {
     const asset = await this.prisma.fixedAsset.findFirst({ where: { id, deletedAt: null }, select: { id: true } });
     if (!asset) throw new AppError("FIXED_ASSET_NOT_FOUND", "固定资产不存在", 404);
     return this.prisma.fixedAssetDisposal.findMany({ where: { assetId: id, deletedAt: null }, include: { voucher: true }, orderBy: { disposalDate: "desc" } });
-  }
-
-  private async nextNumber(tx: Prisma.TransactionClient, year: number) {
-    await tx.$executeRaw`INSERT IGNORE INTO voucher_sequences (fiscal_year,next_value,created_at,updated_at,deleted_at) VALUES (${year},1,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3),NULL)`;
-    const rows = await tx.$queryRaw<Array<{ next_value: number }>>`SELECT next_value FROM voucher_sequences WHERE fiscal_year=${year} FOR UPDATE`;
-    const sequenceNo = Number(rows[0]?.next_value); await tx.voucherSequence.update({ where: { fiscalYear: year }, data: { nextValue: sequenceNo + 1 } });
-    return { sequenceNo, voucherNo: `${year}-${String(sequenceNo).padStart(6, "0")}` };
   }
 
   private data(input: any, partial = false) {

@@ -91,4 +91,24 @@ describe("AiSuggestionService", () => {
     const rejected = await service.reject(generated.id, requester);
     expect(rejected.status).toBe(3);
   });
+
+  it("uses the fast-path heuristic for common bank transactions such as interest", async () => {
+    const repository = new FakeAiSuggestionRepository();
+    const interestSource = { ...bankSourceFixture, id: 302, summary: "2026年第二季度活期结息" };
+    repository.bankSources.set(302, interestSource);
+    repository.accounts.push(
+      ...accountCandidates,
+      { code: "6603", name: "财务费用", category: "PROFIT_AND_LOSS", normalDirection: "DEBIT" },
+    );
+    const provider = new FakeVoucherSuggestionProvider(validOutput);
+    const service = new AiSuggestionService(repository, provider);
+
+    const result = await service.generate({ bankTransactionId: 302 }, requester);
+    expect(result.status).toBe(1);
+    expect(provider.inputs).toHaveLength(0); // Provider was not called because heuristic matched!
+    expect((result.suggestion as VoucherSuggestionOutput).entries).toEqual([
+      expect.objectContaining({ accountCode: "1002", direction: "DEBIT" }),
+      expect.objectContaining({ accountCode: "6603", direction: "CREDIT" }),
+    ]);
+  });
 });

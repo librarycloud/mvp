@@ -93,6 +93,7 @@ export class ReportService {
     mode: "ALL" | "MOVEMENT" | "BALANCE" = "ALL",
     cashTotals?: ReportCashCounterpartyTotal[],
     fixedValues?: Map<number, Prisma.Decimal>,
+    itemAdjustments?: Map<number, Prisma.Decimal>,
   ): Map<number, CalculatedItem> {
     const direct = new Map(totals.map((total) => [total.accountId, total]));
     const children = new Map<number, number[]>();
@@ -118,6 +119,11 @@ export class ReportService {
           const dependencyValue = values.get(dependency.sourceItemId)!.value.mul(dependency.coefficient);
           value = dependency.operator === "ADD" ? value.plus(dependencyValue) : value.minus(dependencyValue);
           formulaTrace.push({ sourceItemId: String(dependency.sourceItemId), operator: dependency.operator, value: dependencyValue.toString() });
+        }
+        const adjustment = itemAdjustments?.get(item.id);
+        if (adjustment) {
+          value = value.plus(adjustment);
+          mappingTrace.push({ unclosedProfitLossAdjustment: adjustment.toString() });
         }
         const fixedValue = fixedValues?.get(item.id);
         if (fixedValue) {
@@ -169,8 +175,46 @@ export class ReportService {
       this.repository.aggregateEntries(earliest, openingEnd),
       this.repository.aggregateEntries(earliest, periodEnd),
     ]);
-    const opening = this.calculate(template, accounts, openingTotals);
-    const closing = this.calculate(template, accounts, closingTotals);
+
+    const profitLossAccounts = new Set(accounts.filter((a) => a.category === "PROFIT_AND_LOSS").map((a) => a.id));
+    const computeUnclosedProfitLoss = (totals: ReportAccountTotal[]) => {
+      let sum = new Prisma.Decimal(0);
+      for (const total of totals) {
+        if (profitLossAccounts.has(total.accountId)) {
+          sum = sum.plus(new Prisma.Decimal(total.credit).minus(total.debit));
+        }
+      }
+      return sum;
+    };
+
+    const currentProfitItem = template.items.find((item) => item.itemCode === "CURRENT_PROFIT");
+    const openingAdjustments = new Map<number, Prisma.Decimal>();
+    const closingAdjustments = new Map<number, Prisma.Decimal>();
+    if (currentProfitItem && profitLossAccounts.size > 0) {
+      const openingUnclosed = computeUnclosedProfitLoss(openingTotals);
+      const closingUnclosed = computeUnclosedProfitLoss(closingTotals);
+      if (!openingUnclosed.isZero()) openingAdjustments.set(currentProfitItem.id, openingUnclosed);
+      if (!closingUnclosed.isZero()) closingAdjustments.set(currentProfitItem.id, closingUnclosed);
+    }
+
+    const opening = this.calculate(template, accounts, openingTotals, "ALL", undefined, undefined, openingAdjustments);
+    const closing = this.calculate(template, accounts, closingTotals, "ALL", undefined, undefined, closingAdjustments);
+
+    const totalAssetsItem = template.items.find((item) => item.itemCode === "TOTAL_ASSETS");
+    const totalLiabilitiesAndEquityItem = template.items.find((item) => item.itemCode === "TOTAL_LIABILITIES_AND_EQUITY");
+    if (totalAssetsItem && totalLiabilitiesAndEquityItem) {
+      const assets = closing.get(totalAssetsItem.id)?.value ?? new Prisma.Decimal(0);
+      const liabilitiesAndEquity = closing.get(totalLiabilitiesAndEquityItem.id)?.value ?? new Prisma.Decimal(0);
+      const diff = assets.minus(liabilitiesAndEquity).abs();
+      if (diff.greaterThan(new Prisma.Decimal("0.05"))) {
+        throw new AppError("REPORT_BALANCE_SHEET_UNBALANCED", `资产负债表期末不平衡：资产总计 ${assets.toString()}，负债和所有者权益总计 ${liabilitiesAndEquity.toString()}，差额 ${diff.toString()}`, 409, {
+          totalAssets: assets.toString(),
+          totalLiabilitiesAndEquity: liabilitiesAndEquity.toString(),
+          difference: diff.toString(),
+        });
+      }
+    }
+
     return template.items.map((item) => ({
       reportItemId: item.id,
       openingAmount: this.reportAmount(opening.get(item.id)?.value),
@@ -238,34 +282,6 @@ export class ReportService {
       const expected = current.get(netIncrease.id)?.value ?? new Prisma.Decimal(0);
       if (!difference.equals(expected)) {
         throw new AppError("REPORT_CASH_FLOW_UNBALANCED", "直接法现金流量与现金余额变动不一致，请检查现金科目配置和已记账凭证", 409, { cashBalanceDifference: difference.toString(), netCashIncrease: expected.toString() });
-        const operating = byCode.get("NET_CASH_OPERATING");
-        if (!operating) {
-          throw new AppError("REPORT_CASH_FLOW_UNBALANCED", "现金流量表缺少经营活动现金流量净额，无法归集未分类现金变动", 409, { difference: difference.toString(), netIncrease: expected.toString() });
-        }
-        const adjustment = difference.minus(expected);
-        const operatingValue = current.get(operating!.id)?.value ?? new Prisma.Decimal(0);
-        current.set(operating!.id, {
-          value: operatingValue.plus(adjustment),
-          trace: {
-            ...(current.get(operating!.id)?.trace ?? {}),
-            cashReconciliationAdjustment: {
-              before: operatingValue.toString(),
-              adjustment: adjustment.toString(),
-              after: operatingValue.plus(adjustment).toString(),
-            },
-          },
-        });
-        current.set(netIncrease!.id, {
-          value: difference,
-          trace: {
-            ...(current.get(netIncrease!.id)?.trace ?? {}),
-            cashReconciliation: {
-              calculatedNetIncrease: expected.toString(),
-              cashBalanceDifference: difference.toString(),
-              operatingAdjustment: adjustment.toString(),
-            },
-          },
-        });
       }
     }
     return template.items.map((item) => ({

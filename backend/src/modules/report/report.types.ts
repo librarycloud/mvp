@@ -2,6 +2,8 @@ export interface ReportAccount {
   id: number;
   parentId: number | null;
   normalDirection: "DEBIT" | "CREDIT";
+  category?: string;
+  code?: string;
 }
 
 export interface ReportAccountTotal {

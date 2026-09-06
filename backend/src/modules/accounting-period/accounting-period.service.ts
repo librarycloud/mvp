@@ -55,6 +55,10 @@ export class AccountingPeriodService implements AccountingPeriodResolver {
     this.assertAdmin(actor);
     const period = await this.require(id);
     if (period.status === ACCOUNTING_PERIOD_STATUS.CLOSED) throw new AppError("ACCOUNTING_PERIOD_ALREADY_CLOSED", "该会计期间已关账", 409);
+    const priorOpen = await this.repository.findPriorOpen(period.year, period.month);
+    if (priorOpen) {
+      throw new AppError("PRIOR_PERIOD_OPEN", `前序会计期间（${priorOpen.periodCode}）尚未关账，必须按时间顺次关账`, 409);
+    }
     await this.closeChecker?.assertReady(period);
     return this.repository.close(id, actor);
   }
@@ -70,6 +74,10 @@ export class AccountingPeriodService implements AccountingPeriodResolver {
     const period = await this.require(id);
     if (period.status === ACCOUNTING_PERIOD_STATUS.LOCKED) throw new AppError("ACCOUNTING_PERIOD_LOCKED", "该会计期间已锁定，不能直接反关账", 409);
     if (period.status === ACCOUNTING_PERIOD_STATUS.OPEN) throw new AppError("ACCOUNTING_PERIOD_ALREADY_OPEN", "该会计期间当前为打开状态", 409);
+    const subsequent = await this.repository.findSubsequentClosed(period.year, period.month);
+    if (subsequent) {
+      throw new AppError("SUBSEQUENT_PERIOD_CLOSED", `后续会计期间（${subsequent.periodCode}）已关账，必须先反关账后续期间`, 409);
+    }
     return this.repository.reopen(id, actor);
   }
 

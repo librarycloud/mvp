@@ -29,6 +29,7 @@ describe("tax declaration routes", () => {
       prepare,
       updateLines: noop,
       review: noop,
+      inspectRisks: noop,
       declare: noop,
       pay: noop,
     } as unknown as TaxController;

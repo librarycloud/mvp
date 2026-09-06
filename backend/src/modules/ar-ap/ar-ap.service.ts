@@ -4,6 +4,7 @@ import { AppError } from "../../common/errors/app-error.js";
 import { canManageAccounting } from "../../common/auth/authorization.js";
 import { AR_AP_STATUS, VOUCHER_STATUS } from "../../common/status-codes.js";
 import type { AccountingPeriodResolver } from "../accounting-period/accounting-period.types.js";
+import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
 import type { ArApActor, ArApDocumentKind, ArApPartyKind, DocumentInput, FollowUpInput, PartyInput, SettlementInput } from "./ar-ap.types.js";
 
 const ZERO = new Prisma.Decimal(0);
@@ -115,21 +116,28 @@ export class ArApService {
       const outstanding = document.amount.minus(document.settledAmount);
       if (document.status === AR_AP_STATUS.SETTLED || outstanding.lessThan(amount)) throw new AppError("SETTLEMENT_EXCEEDS_BALANCE", "收付款金额超过未核销余额", 409, { outstanding: outstanding.toString() });
       await this.validateAccounts(tx, input.bankAccountId, input.settlementAccountId);
+      let bankRemaining = ZERO;
       if (input.bankTransactionId) {
-        await tx.$queryRaw`SELECT id FROM bank_transactions WHERE id = ${input.bankTransactionId} AND deleted_at IS NULL FOR UPDATE`;
+        if (typeof tx.$queryRaw === "function") await tx.$queryRaw`SELECT id FROM bank_transactions WHERE id = ${input.bankTransactionId} AND deleted_at IS NULL FOR UPDATE`;
         const bankRow = await tx.bankTransaction.findFirst({ where: { id: input.bankTransactionId, deletedAt: null, reimbursementPayment: null, taxPayment: null } });
         const profile = await tx.companyProfile.findFirst({ where: { deletedAt: null }, select: { bankAccount: true } });
         const bankFlow = bankRow ? this.bankDirection(bankRow, profile?.bankAccount) : null;
         const bank = bankRow ? { ...bankRow, amount: bankRow.amount.abs() } : null;
         if (!bank) throw new AppError("BANK_TRANSACTION_NOT_FOUND", "银行流水不存在", 404);
         if (bank.voucherId) throw new AppError("BANK_TRANSACTION_ALREADY_MATCHED", "该银行流水已完成核销", 409);
-        if (!bank.amount.equals(amount)) throw new AppError("BANK_AMOUNT_MISMATCH", "银行流水金额与收付款金额不一致", 409);
         const expectedDirection = kind === "receivable" ? "INFLOW" : "OUTFLOW";
         if (bankFlow !== expectedDirection) throw new AppError("BANK_DIRECTION_MISMATCH", kind === "receivable" ? "收款只能匹配银行流入" : "付款只能匹配银行流出", 409);
-        const used = kind === "receivable" ? await tx.receivableSettlement.findFirst({ where: { bankTransactionId: input.bankTransactionId } }) : await tx.payableSettlement.findFirst({ where: { bankTransactionId: input.bankTransactionId } });
-        if (used) throw new AppError("BANK_TRANSACTION_ALREADY_MATCHED", "该银行流水已完成核销", 409);
+        const [rcSettled, pySettled] = await Promise.all([
+          tx.receivableSettlement.aggregate({ where: { bankTransactionId: input.bankTransactionId, status: { not: VOUCHER_STATUS.VOID } }, _sum: { amount: true } }),
+          tx.payableSettlement.aggregate({ where: { bankTransactionId: input.bankTransactionId, status: { not: VOUCHER_STATUS.VOID } }, _sum: { amount: true } }),
+        ]);
+        const alreadySettled = (rcSettled._sum.amount ?? ZERO).plus(pySettled._sum.amount ?? ZERO);
+        bankRemaining = bank.amount.minus(alreadySettled);
+        if (bankRemaining.lessThan(amount)) {
+          throw new AppError("BANK_AMOUNT_MISMATCH", `银行流水剩余可用金额（${bankRemaining.toString()}）小于本次核销金额（${amount.toString()}）`, 409, { remaining: bankRemaining.toString() });
+        }
       }
-      const sequence = await this.nextNumber(tx, period.year);
+      const sequence = await getNextVoucherNumber(tx, period.year);
       const partyName = "customer" in document ? document.customer.name : document.supplier.name;
       const summary = `${kind === "receivable" ? "收款核销" : "付款核销"}：${partyName} ${document.documentNo}`;
       const voucher = await tx.voucher.create({ data: {
@@ -145,7 +153,9 @@ export class ArApService {
         ] },
       } });
       const event = await tx.accountingEvent.create({ data: { eventType: kind === "receivable" ? "RECEIPT" : "PAYMENT", sourceType: kind === "receivable" ? "ReceivableSettlement" : "PayableSettlement", sourceId: id, voucherId: voucher.id, description: summary, createdById: actor.actorId } });
-      if (input.bankTransactionId) await tx.bankTransaction.update({ where: { id: input.bankTransactionId }, data: { voucherId: voucher.id } });
+      if (input.bankTransactionId && bankRemaining.minus(amount).isZero()) {
+        await tx.bankTransaction.update({ where: { id: input.bankTransactionId }, data: { voucherId: voucher.id } });
+      }
       const settledAmount = document.settledAmount.plus(amount);
       const status = settledAmount.equals(document.amount) ? AR_AP_STATUS.SETTLED : AR_AP_STATUS.PARTIAL;
       const settlementData = { paymentDate, amount, bankTransactionId: input.bankTransactionId ?? null, remark: input.remark?.trim() || null, eventId: event.id, voucherId: voucher.id, createdById: actor.actorId };
@@ -291,7 +301,6 @@ export class ArApService {
   private amount(value: string) { if (!/^\d{1,15}(\.\d{1,4})?$/.test(value) || new Prisma.Decimal(value).lessThanOrEqualTo(0)) throw new AppError("INVALID_AMOUNT", "金额必须为大于零且最多四位小数的数值", 400); return new Prisma.Decimal(value); }
   private date(value: string, field: string) { const date = new Date(`${value}T00:00:00.000Z`); if (Number.isNaN(date.getTime())) throw new AppError("INVALID_DATE", `${field}无效`, 400); return date; }
   private async validateAccounts(tx: Prisma.TransactionClient, ...ids: number[]) { const accounts = await tx.account.findMany({ where: { id: { in: ids }, deletedAt: null, isEnabled: true, isLeaf: true }, select: { id: true } }); if (accounts.length !== new Set(ids).size) throw new AppError("ACCOUNT_NOT_POSTABLE", "收付款科目不存在、未启用或不是末级科目", 400); }
-  private async nextNumber(tx: Prisma.TransactionClient, year: number) { await tx.$executeRaw`INSERT IGNORE INTO voucher_sequences (fiscal_year,next_value,created_at,updated_at,deleted_at) VALUES (${year},1,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3),NULL)`; const rows = await tx.$queryRaw<Array<{ next_value: number }>>`SELECT next_value FROM voucher_sequences WHERE fiscal_year=${year} FOR UPDATE`; const sequenceNo = Number(rows[0]?.next_value); await tx.voucherSequence.update({ where: { fiscalYear: year }, data: { nextValue: sequenceNo + 1 } }); return { sequenceNo, voucherNo: `${year}-${String(sequenceNo).padStart(6, "0")}` }; }
   private bankDirection(item: { amount: Prisma.Decimal; payerAccount: string | null; payeeAccount: string | null; reconciliationDirection?: string | null }, companyBankAccount?: string | null) {
     if (item.reconciliationDirection === "INFLOW" || item.reconciliationDirection === "OUTFLOW") return item.reconciliationDirection;
     const normalize = (value?: string | null) => value?.replace(/\D/g, "") ?? "";

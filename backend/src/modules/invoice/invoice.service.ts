@@ -197,8 +197,69 @@ export class InvoiceService {
       if (!invoice.totalAmountWithoutTax.equals(request.amountWithoutTax) || !invoice.totalTaxAmount.equals(request.taxAmount) || !invoice.totalTaxIncludedAmount.equals(request.amountIncludingTax)) throw new AppError("SALES_INVOICE_AMOUNT_MISMATCH", "销项发票金额与开票申请不一致", 409);
       const used = await tx.salesInvoiceRequest.findFirst({ where: { issuedInvoiceId: invoiceId, id: { not: id }, deletedAt: null }, select: { id: true } });
       if (used) throw new AppError("SALES_INVOICE_ALREADY_ISSUED", "该销项发票已用于其他开票申请", 409);
+
+      // 业财一体联动：自动创建或关联客户，并生成对应的应收账款单据（Receivable）
+      let receivableId: number | null = null;
+      if ((tx as any).customer?.findFirst && (tx as any).receivable?.findFirst) {
+        let customer = await (tx as any).customer.findFirst({
+          where: {
+            OR: [
+              { taxId: request.buyerIdNum.trim() },
+              { name: request.buyerName.trim() },
+            ],
+            deletedAt: null,
+          },
+        });
+        if (!customer) {
+          const customerCount = await (tx as any).customer.count();
+          customer = await (tx as any).customer.create({
+            data: {
+              code: `CUST-${String(customerCount + 1).padStart(4, "0")}`,
+              name: request.buyerName.trim(),
+              taxId: request.buyerIdNum.trim(),
+              creditLimit: new Prisma.Decimal(100000),
+              enabled: true,
+            },
+          });
+        }
+
+        const existingReceivable = await (tx as any).receivable.findFirst({
+          where: { documentNo: invoice.invoiceNumber, customerId: customer.id, deletedAt: null },
+        });
+        if (!existingReceivable) {
+          const dueDays = 30;
+          const dueDate = new Date(invoice.issueDate.getTime() + dueDays * 86_400_000);
+          const rec = await (tx as any).receivable.create({
+            data: {
+              customerId: customer.id,
+              documentNo: invoice.invoiceNumber,
+              occurrenceDate: invoice.issueDate,
+              dueDate,
+              amount: invoice.totalTaxIncludedAmount,
+              settledAmount: new Prisma.Decimal(0),
+              currency: invoice.currency || "CNY",
+              status: 0,
+              description: `销项开票申请【${request.requestNo}】自动转应收账款`,
+              createdById: actorId,
+            },
+          });
+          receivableId = rec.id;
+        } else {
+          receivableId = existingReceivable.id;
+        }
+      }
+
       await tx.salesInvoiceRequest.update({ where: { id }, data: { status: 3, issuedInvoiceId: invoiceId } });
-      await tx.auditLog.create({ data: { actorId, action: "UPDATE", resourceType: "SalesInvoiceRequest", resourceId: id, description: "登记销项发票开具", afterData: { invoiceId } } });
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: "UPDATE",
+          resourceType: "SalesInvoiceRequest",
+          resourceId: id,
+          description: "登记销项发票开具并生成应收单据",
+          afterData: { invoiceId, receivableId },
+        },
+      });
       return tx.salesInvoiceRequest.findUniqueOrThrow({ where: { id } });
     });
   }

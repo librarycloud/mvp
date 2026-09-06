@@ -64,6 +64,36 @@ export class PrismaAccountingPeriodRepository implements AccountingPeriodReposit
     });
   }
 
+  async findSubsequentClosed(year: number, month: number): Promise<AccountingPeriodRecord | null> {
+    return this.prisma.accountingPeriod.findFirst({
+      where: {
+        deletedAt: null,
+        status: { in: [ACCOUNTING_PERIOD_STATUS.CLOSED, ACCOUNTING_PERIOD_STATUS.LOCKED] },
+        OR: [
+          { year: { gt: year } },
+          { year, month: { gt: month } },
+        ],
+      },
+      orderBy: [{ year: "asc" }, { month: "asc" }],
+      select: { id: true, year: true, month: true, periodCode: true, startDate: true, endDate: true, status: true, closedAt: true, closedById: true },
+    });
+  }
+
+  async findPriorOpen(year: number, month: number): Promise<AccountingPeriodRecord | null> {
+    return this.prisma.accountingPeriod.findFirst({
+      where: {
+        deletedAt: null,
+        status: ACCOUNTING_PERIOD_STATUS.OPEN,
+        OR: [
+          { year: { lt: year } },
+          { year, month: { lt: month } },
+        ],
+      },
+      orderBy: [{ year: "asc" }, { month: "asc" }],
+      select: { id: true, year: true, month: true, periodCode: true, startDate: true, endDate: true, status: true, closedAt: true, closedById: true },
+    });
+  }
+
   private async changeState(id: number, actor: AccountingPeriodActor, from: number, to: number) {
     return this.prisma.$transaction(async (tx) => {
       const now = new Date();

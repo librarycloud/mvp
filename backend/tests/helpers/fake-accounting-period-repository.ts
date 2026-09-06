@@ -47,4 +47,20 @@ export class FakeAccountingPeriodRepository implements AccountingPeriodRepositor
     if ([...this.periods.values()].some((item) => item.id !== id && (item.year === input.year && item.month === input.month || item.startDate <= input.endDate && item.endDate >= input.startDate))) throw { code: "P2002" };
     const period = this.periods.get(id)!; Object.assign(period, input); period.updatedAt = new Date(); return period;
   }
+
+  async findSubsequentClosed(year: number, month: number) {
+    const list = [...this.periods.values()].filter(
+      (item) => item.status !== 0 && (item.year > year || (item.year === year && item.month > month)),
+    );
+    list.sort((a, b) => a.year - b.year || a.month - b.month);
+    return list[0] ?? null;
+  }
+
+  async findPriorOpen(year: number, month: number) {
+    const list = [...this.periods.values()].filter(
+      (item) => item.status === 0 && (item.year < year || (item.year === year && item.month < month)),
+    );
+    list.sort((a, b) => a.year - b.year || a.month - b.month);
+    return list[0] ?? null;
+  }
 }

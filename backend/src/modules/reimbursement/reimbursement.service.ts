@@ -4,6 +4,7 @@ import { AppError } from "../../common/errors/app-error.js";
 import { canManageAccounting, canOperateCash } from "../../common/auth/authorization.js";
 import { VOUCHER_STATUS } from "../../common/status-codes.js";
 import type { AccountingPeriodResolver } from "../accounting-period/accounting-period.types.js";
+import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
 import type {
   AvailableInvoiceFilter,
   ReimbursementActor,
@@ -355,7 +356,7 @@ export class ReimbursementService {
         if (!accounts.some(row => row.id === input.paymentAccountId && row.code.startsWith("1002"))) throw new AppError("INVALID_BANK_ACCOUNT", "选择银行流水时付款科目必须是银行存款末级科目", 400);
       }
       if (bankTransaction && this.bankDirection(bankTransaction, profile?.bankAccount) !== "OUTFLOW") throw new AppError("BANK_DIRECTION_MISMATCH", "Reimbursement payment must use an outgoing bank transaction", 409);
-      const sequence = await this.nextVoucherNumber(tx, period.year);
+      const sequence = await getNextVoucherNumber(tx, period.year);
       const invoiceNos = current.invoices.map(row => row.invoiceNumber).join(",");
       const evidenceLabel = current.evidenceType === EVIDENCE_TYPE.OTHER ? " 其他凭证" : current.evidenceType === EVIDENCE_TYPE.NO_INVOICE ? " 无票支出" : "";
       const summary = `报销付款：${current.applicantName} ${current.expenseType}${invoiceNos ? ` 发票${invoiceNos}` : evidenceLabel}`;
@@ -662,14 +663,6 @@ export class ReimbursementService {
   private nextReimbursementNo() {
     const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
     return `RB-${today}-${randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
-  }
-
-  private async nextVoucherNumber(tx: Transaction, year: number) {
-    await tx.$executeRaw`INSERT IGNORE INTO voucher_sequences (fiscal_year,next_value,created_at,updated_at,deleted_at) VALUES (${year},1,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3),NULL)`;
-    const rows = await tx.$queryRaw<Array<{ next_value: number }>>`SELECT next_value FROM voucher_sequences WHERE fiscal_year=${year} FOR UPDATE`;
-    const sequenceNo = Number(rows[0]?.next_value);
-    await tx.voucherSequence.update({ where: { fiscalYear: year }, data: { nextValue: sequenceNo + 1 } });
-    return { sequenceNo, voucherNo: `${year}-${String(sequenceNo).padStart(6, "0")}` };
   }
 
   private audit(tx: Transaction, actorId: number, action: "CREATE" | "UPDATE" | "DELETE" | "REVIEW", resourceType: string, resourceId: number, beforeData: object | null, afterData: object) {

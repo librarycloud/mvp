@@ -29,6 +29,7 @@ export async function taxRoutes(app: FastifyInstance, options: { controller: Tax
   app.get("/declarations/:id", { preHandler: authenticate, schema: { tags: ["税务申报"], security: [{ bearerAuth: [] }], params: id }, handler: options.controller.declaration });
   app.put("/declarations/:id/lines", { preHandler: editor, schema: { tags: ["税务申报"], security: [{ bearerAuth: [] }], params: id, body: adjustmentBody }, handler: options.controller.updateLines });
   app.post("/declarations/:id/review", { preHandler: manager, schema: { tags: ["税务申报"], security: [{ bearerAuth: [] }], params: id }, handler: options.controller.review });
-  app.post("/declarations/:id/declare", { preHandler: manager, schema: { tags: ["税务申报"], security: [{ bearerAuth: [] }], params: id, body: Type.Object({ declarationNo: Type.String({ minLength: 1, maxLength: 100 }) }) }, handler: options.controller.declare });
+  app.get("/declarations/:id/risks", { preHandler: authenticate, schema: { tags: ["税务申报"], summary: "金税四期申报前风险自检", security: [{ bearerAuth: [] }], params: id }, handler: options.controller.inspectRisks });
+  app.post("/declarations/:id/declare", { preHandler: manager, schema: { tags: ["税务申报"], security: [{ bearerAuth: [] }], params: id, body: Type.Object({ declarationNo: Type.Optional(Type.String({ maxLength: 100 })) }) }, handler: options.controller.declare });
   app.post("/declarations/:id/payments", { preHandler: payer, schema: { tags: ["税务申报"], security: [{ bearerAuth: [] }], params: id, body: paymentBody }, handler: options.controller.pay });
 }

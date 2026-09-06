@@ -78,6 +78,9 @@ export class VoucherService {
   async review(id: number, actor: VoucherActor) {
     this.assertAdmin(actor);
     const current = await this.getByStatus(id, VOUCHER_STATUS.PENDING);
+    if (process.env.ENFORCE_SOD !== "false" && current.createdById === actor.actorId) {
+      throw new AppError("SOD_VIOLATION", "制单人不能审核自己填制的凭证", 403);
+    }
     await this.validateStoredBalance(current);
     return this.repository.changeStatus(current, VOUCHER_STATUS.PENDING, actor);
   }
@@ -203,7 +206,7 @@ export class VoucherService {
     const entries: NormalizedVoucherEntry[] = input.entries.map((entry, index) => {
       const debit = this.amount(entry.debitAmount, "借方金额");
       const credit = this.amount(entry.creditAmount, "贷方金额");
-      if ((debit.greaterThan(0) ? 1 : 0) + (credit.greaterThan(0) ? 1 : 0) !== 1) {
+      if ((!debit.isZero() ? 1 : 0) + (!credit.isZero() ? 1 : 0) !== 1) {
         throw new AppError("INVALID_VOUCHER_ENTRY", `第${index + 1}条分录必须且只能填写借方或贷方金额`, 400);
       }
       totalDebit = totalDebit.plus(debit);
@@ -219,7 +222,7 @@ export class VoucherService {
         lineNo: index + 1,
       };
     });
-    if (!totalDebit.greaterThan(0) || !totalDebit.equals(totalCredit)) {
+    if (totalDebit.isZero() || !totalDebit.equals(totalCredit)) {
       throw new AppError("VOUCHER_NOT_BALANCED", "凭证借贷金额不平衡", 400);
     }
     await this.validateAccounts(entries.map((entry) => entry.accountId));
@@ -239,7 +242,7 @@ export class VoucherService {
 
   private amount(value: string, label: string): Prisma.Decimal {
     const text = value.trim();
-    if (!/^\d{1,15}(?:\.\d{1,4})?$/.test(text)) {
+    if (!/^-?\d{1,15}(?:\.\d{1,4})?$/.test(text)) {
       throw new AppError("INVALID_VOUCHER_AMOUNT", `${label}格式错误`, 400);
     }
     return new Prisma.Decimal(text);
@@ -276,7 +279,7 @@ export class VoucherService {
     const invalidSide = entries.some((item) => {
       const debit = new Prisma.Decimal(item.debitAmount);
       const credit = new Prisma.Decimal(item.creditAmount);
-      return (debit.greaterThan(0) ? 1 : 0) + (credit.greaterThan(0) ? 1 : 0) !== 1;
+      return (!debit.isZero() ? 1 : 0) + (!credit.isZero() ? 1 : 0) !== 1;
     });
     const debit = entries.reduce((sum, item) => sum.plus(item.debitAmount), new Prisma.Decimal(0));
     const credit = entries.reduce((sum, item) => sum.plus(item.creditAmount), new Prisma.Decimal(0));

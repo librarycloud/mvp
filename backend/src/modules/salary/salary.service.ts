@@ -3,6 +3,7 @@ import { Prisma, type PrismaClient } from "../../generated/prisma/client.js";
 import { AppError } from "../../common/errors/app-error.js";
 import { EMPLOYEE_STATUS, VOUCHER_STATUS } from "../../common/status-codes.js";
 import type { AccountingPeriodResolver } from "../accounting-period/accounting-period.types.js";
+import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
 import type { EmployeeInput, SalaryAccounts, SalaryActor, SalaryItemInput, SalaryOverride } from "./salary.types.js";
 
 const ZERO = new Prisma.Decimal(0);
@@ -111,14 +112,68 @@ export class SalaryService {
   }
 
   private async createSalary(tx: Transaction, employee: any, period: any, items: any[], accounts: SalaryAccounts, actor: SalaryActor, override?: SalaryOverride, salaryId?: number) {
-    const bucket = this.itemBuckets(items); const baseSalary = this.override(override?.baseSalary, employee.baseSalary); const bonus = this.override(override?.bonus, bucket.bonus); const allowance = this.override(override?.allowance, bucket.allowance); const deduction = this.override(override?.deduction, bucket.deduction); const socialInsurance = this.override(override?.socialInsurance, employee.socialInsurance.plus(bucket.socialInsurance)); const housingFund = this.override(override?.housingFund, employee.housingFund.plus(bucket.housingFund)); const individualIncomeTax = this.override(override?.individualIncomeTax, ZERO);
-    const grossAmount = baseSalary.plus(bonus).plus(allowance); const netAmount = grossAmount.minus(deduction).minus(socialInsurance).minus(housingFund).minus(individualIncomeTax); if (netAmount.lessThan(0)) throw new AppError("INVALID_SALARY_AMOUNT", `员工 ${employee.employeeNo} 的实发工资不能为负数`, 400);
-    const summary = `计提${period.periodCode}工资：${employee.name}`; const sequence = await this.nextNumber(tx, period.year);
+    const bucket = this.itemBuckets(items);
+    const baseSalary = this.override(override?.baseSalary, employee.baseSalary);
+    const bonus = this.override(override?.bonus, bucket.bonus);
+    const allowance = this.override(override?.allowance, bucket.allowance);
+    const deduction = this.override(override?.deduction, bucket.deduction);
+    const socialInsurance = this.override(override?.socialInsurance, employee.socialInsurance.plus(bucket.socialInsurance));
+    const housingFund = this.override(override?.housingFund, employee.housingFund.plus(bucket.housingFund));
+    const grossAmount = baseSalary.plus(bonus).plus(allowance);
+    let individualIncomeTax = ZERO;
+    if (override?.individualIncomeTax !== undefined && override?.individualIncomeTax !== "") {
+      individualIncomeTax = this.money(override.individualIncomeTax, "个税金额");
+    } else {
+      individualIncomeTax = await this.calculateTax(tx, employee, period, grossAmount, socialInsurance.plus(housingFund));
+    }
+    const netAmount = grossAmount.minus(deduction).minus(socialInsurance).minus(housingFund).minus(individualIncomeTax); if (netAmount.lessThan(0)) throw new AppError("INVALID_SALARY_AMOUNT", `员工 ${employee.employeeNo} 的实发工资不能为负数`, 400);
+    const summary = `计提${period.periodCode}工资：${employee.name}`; const sequence = await getNextVoucherNumber(tx, period.year);
     const voucher = await tx.voucher.create({ data: { ...sequence, fiscalYear: period.year, fiscalPeriod: period.month, voucherDate: period.endDate, postingDate: period.endDate, periodId: period.id, summary, sourceType: "MANUAL", category: "ACCRUAL", status: VOUCHER_STATUS.POSTED, totalDebit: grossAmount, totalCredit: grossAmount, createdById: actor.actorId, reviewerId: actor.actorId, reviewedAt: new Date(), postedById: actor.actorId, postedAt: new Date(), entries: { create: [{ lineNo: 1, accountId: accounts.expenseAccountId, summary, debitAmount: grossAmount, creditAmount: ZERO }, { lineNo: 2, accountId: accounts.payableAccountId, summary, debitAmount: ZERO, creditAmount: grossAmount }] } } });
     const event = await tx.accountingEvent.create({ data: { eventType: "SALARY", sourceType: "Salary", sourceId: employee.id, voucherId: voucher.id, description: summary, createdById: actor.actorId } });
     const salaryData = { employeeId: employee.id, periodId: period.id, baseSalary, bonus, allowance, deduction, socialInsurance, housingFund, individualIncomeTax, grossAmount, netAmount, status: VOUCHER_STATUS.POSTED, eventId: event.id, voucherId: voucher.id, createdById: actor.actorId };
     const salary = salaryId ? await tx.salary.update({ where: { id: salaryId }, data: salaryData }) : await tx.salary.create({ data: salaryData });
     await this.audit(tx, actor.actorId, salaryId ? "UPDATE" : "CREATE", "Salary", salary.id, { employeeNo: employee.employeeNo, periodId: period.id, grossAmount: grossAmount.toString() }); return salary;
+  }
+  private async calculateTax(tx: Transaction, employee: any, period: any, currentGross: Prisma.Decimal, currentSocialFund: Prisma.Decimal): Promise<Prisma.Decimal> {
+    const priorSalaries = typeof tx.salary?.findMany === "function"
+      ? await tx.salary.findMany({
+          where: {
+            employeeId: employee.id,
+            deletedAt: null,
+            status: VOUCHER_STATUS.POSTED,
+            period: {
+              year: period.year,
+              month: { lt: period.month },
+              deletedAt: null,
+            },
+          },
+          select: { grossAmount: true, socialInsurance: true, housingFund: true, individualIncomeTax: true },
+        })
+      : [];
+    let cumGross = currentGross;
+    let cumSocialFund = currentSocialFund;
+    let cumPaidTax = ZERO;
+    for (const s of priorSalaries) {
+      cumGross = cumGross.plus(s.grossAmount);
+      cumSocialFund = cumSocialFund.plus(s.socialInsurance).plus(s.housingFund);
+      cumPaidTax = cumPaidTax.plus(s.individualIncomeTax);
+    }
+    const monthCount = Math.max(1, Math.min(12, period.month ?? 1));
+    const standardDeduction = new Prisma.Decimal(5000 * monthCount);
+    const taxableIncome = cumGross.minus(standardDeduction).minus(cumSocialFund);
+    if (taxableIncome.lessThanOrEqualTo(ZERO)) return ZERO;
+    const brackets = [
+      { limit: new Prisma.Decimal(36000), rate: new Prisma.Decimal("0.03"), deduction: new Prisma.Decimal(0) },
+      { limit: new Prisma.Decimal(144000), rate: new Prisma.Decimal("0.10"), deduction: new Prisma.Decimal(2520) },
+      { limit: new Prisma.Decimal(300000), rate: new Prisma.Decimal("0.20"), deduction: new Prisma.Decimal(16920) },
+      { limit: new Prisma.Decimal(420000), rate: new Prisma.Decimal("0.25"), deduction: new Prisma.Decimal(31920) },
+      { limit: new Prisma.Decimal(660000), rate: new Prisma.Decimal("0.30"), deduction: new Prisma.Decimal(52920) },
+      { limit: new Prisma.Decimal(960000), rate: new Prisma.Decimal("0.35"), deduction: new Prisma.Decimal(85920) },
+      { limit: new Prisma.Decimal(Infinity), rate: new Prisma.Decimal("0.45"), deduction: new Prisma.Decimal(181920) },
+    ];
+    const bracket = brackets.find((b) => taxableIncome.lessThanOrEqualTo(b.limit))!;
+    const cumTax = taxableIncome.mul(bracket.rate).minus(bracket.deduction).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+    return Prisma.Decimal.max(ZERO, cumTax.minus(cumPaidTax));
   }
   private itemBuckets(items: any[]) { const result = { bonus: ZERO, allowance: ZERO, deduction: ZERO, socialInsurance: ZERO, housingFund: ZERO }; for (const item of items) { if (item.category === "BONUS") result.bonus = result.bonus.plus(item.defaultAmount); else if (item.category === "ALLOWANCE") result.allowance = result.allowance.plus(item.defaultAmount); else if (item.category === "DEDUCTION") result.deduction = result.deduction.plus(item.defaultAmount); else if (item.category === "SOCIAL_INSURANCE") result.socialInsurance = result.socialInsurance.plus(item.defaultAmount); else if (item.category === "HOUSING_FUND") result.housingFund = result.housingFund.plus(item.defaultAmount); } return result; }
   private employeeData(input: Partial<EmployeeInput>, partial = false): any { const out: Record<string, unknown> = {}; for (const key of ["employeeNo", "name", "idNumber", "department", "position", "bankName", "bankAccount"] as const) if (input[key] !== undefined) out[key] = input[key]?.trim() || null; if (input.status !== undefined) out.status = Number(input.status); if (!partial && (!input.employeeNo?.trim() || !input.name?.trim())) throw new AppError("INVALID_EMPLOYEE", "员工编号和姓名不能为空", 400); if (input.joinDate !== undefined) out.joinDate = input.joinDate ? this.date(input.joinDate) : null; for (const key of ["baseSalary", "socialInsurance", "housingFund"] as const) if (input[key] !== undefined) out[key] = this.money(input[key] as string, key); if (!partial && input.baseSalary === undefined) throw new AppError("INVALID_SALARY_AMOUNT", "基本工资不能为空", 400); return out; }
@@ -127,7 +182,6 @@ export class SalaryService {
   private override(value: string | undefined, fallback: Prisma.Decimal) { return value === undefined || value === "" ? fallback : this.money(value, "工资导入金额"); }
   private date(value: string) { const date = new Date(`${value}T00:00:00.000Z`); if (Number.isNaN(date.getTime())) throw new AppError("INVALID_DATE", "日期无效", 400); return date; }
   private async assertAccounts(tx: Transaction, accounts: SalaryAccounts) { if (accounts.expenseAccountId === accounts.payableAccountId) throw new AppError("INVALID_SALARY_ACCOUNTS", "工资费用科目与应付工资科目不能相同", 400); const rows = await tx.account.findMany({ where: { id: { in: [accounts.expenseAccountId, accounts.payableAccountId] }, deletedAt: null, isEnabled: true, isLeaf: true }, select: { id: true } }); if (rows.length !== 2) throw new AppError("ACCOUNT_NOT_POSTABLE", "工资凭证科目不存在、未启用或不是末级科目", 400); }
-  private async nextNumber(tx: Transaction, year: number) { await tx.$executeRaw`INSERT IGNORE INTO voucher_sequences (fiscal_year,next_value,created_at,updated_at,deleted_at) VALUES (${year},1,CURRENT_TIMESTAMP(3),CURRENT_TIMESTAMP(3),NULL)`; const rows = await tx.$queryRaw<Array<{ next_value:number }>>`SELECT next_value FROM voucher_sequences WHERE fiscal_year=${year} FOR UPDATE`; const sequenceNo = Number(rows[0]?.next_value); await tx.voucherSequence.update({ where: { fiscalYear: year }, data: { nextValue: sequenceNo + 1 } }); return { sequenceNo, voucherNo: `${year}-${String(sequenceNo).padStart(6, "0")}` }; }
   private audit(tx: Transaction, actorId: number, action: "CREATE"|"UPDATE", resourceType: string, resourceId: number, afterData: object) { return tx.auditLog.create({ data: { actorId, action, resourceType, resourceId, beforeData: Prisma.JsonNull, afterData } }); }
   private admin(actor: SalaryActor) { if (actor.role !== "ADMIN") throw new AppError("FORBIDDEN", "仅管理员可以维护工资数据或生成工资单", 403); }
 }

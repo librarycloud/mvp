@@ -79,7 +79,7 @@ export class PrismaReportRepository implements ReportRepository {
   }
 
   listAccounts() {
-    return this.prisma.account.findMany({ select: { id: true, parentId: true, normalDirection: true } });
+    return this.prisma.account.findMany({ select: { id: true, parentId: true, normalDirection: true, category: true, code: true } });
   }
 
   listAccountingPeriods(fiscalYear: number) {
@@ -218,7 +218,26 @@ export class PrismaReportRepository implements ReportRepository {
           template: { select: { code: true, name: true, type: true, version: true } },
           lines: {
             where: { deletedAt: null },
-            include: { reportItem: { select: { itemCode: true, name: true, lineNumber: true, sortOrder: true } } },
+            include: {
+              reportItem: {
+                select: {
+                  id: true,
+                  itemCode: true,
+                  name: true,
+                  lineNumber: true,
+                  sortOrder: true,
+                  accountMappings: {
+                    where: { deletedAt: null },
+                    select: {
+                      accountId: true,
+                      operator: true,
+                      valueType: true,
+                      account: { select: { id: true, code: true, name: true } },
+                    },
+                  },
+                },
+              },
+            },
             orderBy: { reportItem: { sortOrder: "asc" } },
           },
         },
@@ -231,7 +250,30 @@ export class PrismaReportRepository implements ReportRepository {
       where: { id, deletedAt: null },
       include: {
         template: { select: { code: true, name: true, type: true, version: true } },
-        lines: { where: { deletedAt: null }, include: { reportItem: { select: { itemCode: true, name: true, lineNumber: true, sortOrder: true } } }, orderBy: { reportItem: { sortOrder: "asc" } } },
+        lines: {
+          where: { deletedAt: null },
+          include: {
+            reportItem: {
+              select: {
+                id: true,
+                itemCode: true,
+                name: true,
+                lineNumber: true,
+                sortOrder: true,
+                accountMappings: {
+                  where: { deletedAt: null },
+                  select: {
+                    accountId: true,
+                    operator: true,
+                    valueType: true,
+                    account: { select: { id: true, code: true, name: true } },
+                  },
+                },
+              },
+            },
+          },
+          orderBy: { reportItem: { sortOrder: "asc" } },
+        },
       },
     });
   }

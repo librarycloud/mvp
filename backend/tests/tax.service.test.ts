@@ -44,4 +44,53 @@ describe("TaxService", () => {
     expect(tx.taxDeclaration.findFirst).toHaveBeenCalledTimes(2);
     expect(baseFind).not.toHaveBeenCalled();
   });
+
+  it("inspects VAT tax burden risk and zero-declaration risk", async () => {
+    const declaration = {
+      id: 9,
+      taxType: "VAT",
+      periodStart: new Date("2026-07-01"),
+      periodEnd: new Date("2026-07-31"),
+      payableAmount: new Prisma.Decimal("0"),
+      lines: [
+        { lineCode: "OUTPUT_TAX", declared: new Prisma.Decimal("1000") },
+        { lineCode: "DEDUCTIBLE_INPUT_TAX", declared: new Prisma.Decimal("-1000") },
+      ],
+    };
+    const prisma = {
+      taxDeclaration: { findFirst: vi.fn().mockResolvedValue(declaration) },
+      invoice: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { totalAmountWithoutTax: new Prisma.Decimal("10000") } }),
+      },
+    } as any;
+    const result = await new TaxService(prisma).inspectRisks(9);
+    expect(result.riskCount).toBeGreaterThan(0);
+    expect(result.risks.some((r) => r.ruleCode === "VAT_ZERO_DECLARATION")).toBe(true);
+    expect(result.risks.some((r) => r.ruleCode === "VAT_BURDEN_LOW")).toBe(true);
+  });
+
+  it("auto-generates standard tax declaration receipt number if not provided", async () => {
+    const row = { id: 10, fiscalYear: 2026, period: 8, status: "REVIEWED" };
+    const saved = { ...row, status: "DECLARED", declarationNo: "DZSWJ-202608-000010" };
+    const tx = {
+      $queryRaw: vi.fn(),
+      taxDeclaration: {
+        findFirst: vi.fn().mockResolvedValueOnce(row).mockResolvedValueOnce(saved),
+        update: vi.fn().mockResolvedValue(saved),
+      },
+      auditLog: { create: vi.fn() },
+      companyProfile: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (work) => work(tx)),
+      taxDeclaration: { findFirst: vi.fn().mockResolvedValue(saved) },
+    } as any;
+
+    const result = await new TaxService(prisma).declare(10, undefined, 1);
+    expect(tx.taxDeclaration.update).toHaveBeenCalledWith({
+      where: { id: 10 },
+      data: expect.objectContaining({ declarationNo: "DZSWJ-202608-000010", status: "DECLARED" }),
+    });
+    expect(result).toEqual(saved);
+  });
 });

@@ -263,4 +263,63 @@ describe("ReportService", () => {
     expect(repository.saved!.lines.find((line) => line.reportItemId === 92)).toMatchObject({ currentAmount: "70" });
     expect(repository.saved!.lines.find((line) => line.reportItemId === 96)).toMatchObject({ currentAmount: "30" });
   });
+
+  it("dynamically balances balance sheet under statement-method by adding unclosed profit to CURRENT_PROFIT", async () => {
+    const repository = new FakeReportRepository();
+    repository.template = {
+      id: 3, code: "BALANCE_SHEET_CN_ASBE_V1", name: "资产负债表", type: "BALANCE_SHEET", version: 1,
+      items: [
+        { id: 301, itemCode: "CASH", name: "货币资金", lineNumber: 1, sortOrder: 1, mappings: [{ accountId: 1002, operator: "ADD", valueType: "CLOSING_BALANCE", direction: "DEBIT", includeChildren: true }], dependencies: [] },
+        { id: 302, itemCode: "TOTAL_ASSETS", name: "资产总计", lineNumber: 2, sortOrder: 2, mappings: [], dependencies: [{ sourceItemId: 301, operator: "ADD", coefficient: "1" }] },
+        { id: 303, itemCode: "CURRENT_PROFIT", name: "未分配利润", lineNumber: 3, sortOrder: 3, mappings: [{ accountId: 4104, operator: "ADD", valueType: "CLOSING_BALANCE", direction: "CREDIT", includeChildren: true }], dependencies: [] },
+        { id: 304, itemCode: "TOTAL_LIABILITIES_AND_EQUITY", name: "负债和所有者权益总计", lineNumber: 4, sortOrder: 4, mappings: [], dependencies: [{ sourceItemId: 303, operator: "ADD", coefficient: "1" }] },
+      ],
+    };
+    repository.accounts = [
+      { id: 1002, parentId: null, normalDirection: "DEBIT", category: "ASSET" },
+      { id: 4104, parentId: null, normalDirection: "CREDIT", category: "EQUITY" },
+      { id: 6001, parentId: null, normalDirection: "CREDIT", category: "PROFIT_AND_LOSS" }, // 主营业务收入
+    ];
+    // 假设本期发生了 借：银行存款 50000，贷：主营业务收入 50000，4104 为 0，未结转本年利润
+    repository.aggregateEntries = async () => [
+      { accountId: 1002, debit: "50000", credit: "0" },
+      { accountId: 4104, debit: "0", credit: "0" },
+      { accountId: 6001, debit: "0", credit: "50000" },
+    ];
+
+    await new ReportService(repository).generateBalanceSheet({ periodType: "MONTH", fiscalYear: 2026, period: 7 }, 1);
+
+    const profitLine = repository.saved!.lines.find((line) => line.reportItemId === 303);
+    const assetLine = repository.saved!.lines.find((line) => line.reportItemId === 302);
+    const liabEquityLine = repository.saved!.lines.find((line) => line.reportItemId === 304);
+
+    expect(profitLine).toMatchObject({ closingAmount: "50000" });
+    expect(assetLine).toMatchObject({ closingAmount: "50000" });
+    expect(liabEquityLine).toMatchObject({ closingAmount: "50000" });
+  });
+
+  it("throws error when balance sheet assets and liabilities/equity do not balance", async () => {
+    const repository = new FakeReportRepository();
+    repository.template = {
+      id: 3, code: "BALANCE_SHEET_CN_ASBE_V1", name: "资产负债表", type: "BALANCE_SHEET", version: 1,
+      items: [
+        { id: 301, itemCode: "CASH", name: "货币资金", lineNumber: 1, sortOrder: 1, mappings: [{ accountId: 1002, operator: "ADD", valueType: "CLOSING_BALANCE", direction: "DEBIT", includeChildren: true }], dependencies: [] },
+        { id: 302, itemCode: "TOTAL_ASSETS", name: "资产总计", lineNumber: 2, sortOrder: 2, mappings: [], dependencies: [{ sourceItemId: 301, operator: "ADD", coefficient: "1" }] },
+        { id: 303, itemCode: "TOTAL_LIABILITIES_AND_EQUITY", name: "负债和所有者权益总计", lineNumber: 3, sortOrder: 3, mappings: [{ accountId: 4001, operator: "ADD", valueType: "CLOSING_BALANCE", direction: "CREDIT", includeChildren: true }], dependencies: [] },
+      ],
+    };
+    repository.accounts = [
+      { id: 1002, parentId: null, normalDirection: "DEBIT", category: "ASSET" },
+      { id: 4001, parentId: null, normalDirection: "CREDIT", category: "EQUITY" },
+    ];
+    // 资产 10000，但权益只有 6000，导致差额 4000
+    repository.aggregateEntries = async () => [
+      { accountId: 1002, debit: "10000", credit: "0" },
+      { accountId: 4001, debit: "0", credit: "6000" },
+    ];
+
+    await expect(
+      new ReportService(repository).generateBalanceSheet({ periodType: "MONTH", fiscalYear: 2026, period: 7 }, 1),
+    ).rejects.toMatchObject({ code: "REPORT_BALANCE_SHEET_UNBALANCED" });
+  });
 });

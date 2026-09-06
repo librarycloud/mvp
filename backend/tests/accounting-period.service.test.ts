@@ -71,4 +71,32 @@ describe("AccountingPeriodService", () => {
 
     await expect(service.create(2026, 7, admin)).rejects.toMatchObject({ code: "ACCOUNTING_PERIOD_OVERLAP" });
   });
+
+  it("enforces sequential reopening: cannot reopen if subsequent periods are closed", async () => {
+    const service = new AccountingPeriodService(new FakeAccountingPeriodRepository());
+    const period1 = await service.create(2026, 1, admin) as { id: number };
+    const period2 = await service.create(2026, 2, admin) as { id: number };
+    await service.close(period1.id, admin);
+    await service.close(period2.id, admin);
+
+    // 尝试跳过 2 月直接反关账 1 月，应当被拦截
+    await expect(service.reopen(period1.id, admin)).rejects.toMatchObject({ code: "SUBSEQUENT_PERIOD_CLOSED" });
+
+    // 逆序反关账：先反关账 2 月，再反关账 1 月，成功
+    await service.reopen(period2.id, admin);
+    await expect(service.reopen(period1.id, admin)).resolves.toMatchObject({ status: 0 });
+  });
+
+  it("enforces sequential closing: cannot close if prior periods are open", async () => {
+    const service = new AccountingPeriodService(new FakeAccountingPeriodRepository());
+    const period1 = await service.create(2026, 1, admin) as { id: number };
+    const period2 = await service.create(2026, 2, admin) as { id: number };
+
+    // 尝试在 1 月尚未关账时直接关闭 2 月，应当被拦截
+    await expect(service.close(period2.id, admin)).rejects.toMatchObject({ code: "PRIOR_PERIOD_OPEN" });
+
+    // 顺次关账：先关 1 月，再关 2 月，成功
+    await service.close(period1.id, admin);
+    await expect(service.close(period2.id, admin)).resolves.toMatchObject({ status: 1 });
+  });
 });

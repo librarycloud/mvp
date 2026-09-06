@@ -11,7 +11,7 @@ import {
 import { FakeAccountingPeriodRepository } from "./helpers/fake-accounting-period-repository.js";
 
 const user = { actorId: 1, role: "ACCOUNTANT" as const };
-const admin = { ...user, role: "ADMIN" as const };
+const admin = { actorId: 2, role: "ADMIN" as const };
 const balancedEntries: VoucherEntryInput[] = [
   { accountId: debitAccountId, summary: "确认费用", debitAmount: "100.10", creditAmount: "0" },
   { accountId: creditAccountId, summary: "支付款项", debitAmount: "0", creditAmount: "100.10" },
@@ -207,5 +207,33 @@ describe("VoucherService", () => {
         user,
       ),
     ).rejects.toMatchObject({ code: "UNSUPPORTED_ATTACHMENT" });
+  });
+
+  it("supports red-letter (negative) vouchers with algebraic debit/credit balance", async () => {
+    const { service } = setup();
+    const redVoucher = await service.createManual(
+      {
+        voucherDate: new Date(2026, 6, 1),
+        summary: "冲减费用（红字冲销）",
+        entries: [
+          { accountId: debitAccountId, summary: "冲减管理费用", debitAmount: "-50.00", creditAmount: "0" },
+          { accountId: creditAccountId, summary: "冲减银行存款", debitAmount: "0", creditAmount: "-50.00" },
+        ],
+      },
+      user,
+    );
+    expect(redVoucher).toMatchObject({ totalDebit: "-50", totalCredit: "-50" });
+  });
+
+  it("enforces segregation of duties (SoD): creator cannot review own voucher", async () => {
+    const { service } = setup();
+    const creatorAdmin = { actorId: 99, role: "ADMIN" as const };
+    const voucher = (await service.createManual(
+      { voucherDate: new Date(2026, 6, 1), summary: "自审拦截测试", entries: balancedEntries },
+      creatorAdmin,
+    )) as { id: number };
+
+    await service.submit(voucher.id, creatorAdmin);
+    await expect(service.review(voucher.id, creatorAdmin)).rejects.toMatchObject({ code: "SOD_VIOLATION" });
   });
 });

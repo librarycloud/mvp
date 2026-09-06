@@ -33,6 +33,8 @@ export interface AccountingPeriodRepository {
   close(id: number, actor: AccountingPeriodActor): Promise<unknown>;
   reopen(id: number, actor: AccountingPeriodActor): Promise<unknown>;
   update(id: number, input: { year: number; month: number; periodCode: string; startDate: Date; endDate: Date }, actor: AccountingPeriodActor): Promise<unknown>;
+  findSubsequentClosed(year: number, month: number): Promise<AccountingPeriodRecord | null>;
+  findPriorOpen(year: number, month: number): Promise<AccountingPeriodRecord | null>;
 }
 
 export interface AccountingPeriodResolver {

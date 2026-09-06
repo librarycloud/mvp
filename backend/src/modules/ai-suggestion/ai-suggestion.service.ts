@@ -54,7 +54,8 @@ export class AiSuggestionService {
     });
 
     try {
-      const output = await this.provider.suggest(snapshot);
+      const heuristic = this.matchHeuristic(snapshot);
+      const output = heuristic ?? await this.provider.suggest(snapshot);
       this.validateOutput(output, candidateAccounts.map((account) => account.code));
       return await this.repository.markGenerated(pending.id, output, requester);
     } catch (error) {
@@ -63,6 +64,44 @@ export class AiSuggestionService {
       if (error instanceof AppError) throw error;
       throw new AppError("AI_PROVIDER_ERROR", "AI 凭证建议生成失败", 502);
     }
+  }
+
+  private matchHeuristic(snapshot: VoucherSuggestionInput): VoucherSuggestionOutput | null {
+    const summary = (snapshot.userSummary || snapshot.bankTransaction?.summary || "").trim();
+    if (!summary) return null;
+
+    const candidateCodes = new Set(snapshot.candidateAccounts.map((a) => a.code));
+    const findCode = (prefix: string) => snapshot.candidateAccounts.find((a) => a.code.startsWith(prefix))?.code;
+    const bankCode = findCode("1002") || findCode("1001");
+    if (!bankCode) return null;
+
+    if (summary.includes("结息") || summary.includes("利息收入")) {
+      const finCode = findCode("6603") || findCode("5603");
+      if (finCode && candidateCodes.has(finCode) && candidateCodes.has(bankCode)) {
+        return {
+          summary: `银行结息：${summary}`,
+          entries: [
+            { direction: "DEBIT", accountCode: bankCode, rationale: "银行存款结息增加记借方" },
+            { direction: "CREDIT", accountCode: finCode, rationale: "利息收入冲减财务费用记贷方" },
+          ],
+        };
+      }
+    }
+
+    if (summary.includes("手续费") || summary.includes("工本费") || summary.includes("服务费")) {
+      const finCode = findCode("6603") || findCode("5603");
+      if (finCode && candidateCodes.has(finCode) && candidateCodes.has(bankCode)) {
+        return {
+          summary: `支付银行手续费：${summary}`,
+          entries: [
+            { direction: "DEBIT", accountCode: finCode, rationale: "银行手续费计入财务费用借方" },
+            { direction: "CREDIT", accountCode: bankCode, rationale: "银行存款支出记贷方" },
+          ],
+        };
+      }
+    }
+
+    return null;
   }
 
   async getById(id: number, requester: SuggestionRequester) {
