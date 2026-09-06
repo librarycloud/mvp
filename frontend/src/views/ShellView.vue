@@ -49,6 +49,7 @@ interface MenuGroup {
 const primaryMenu: MenuLink[] = [
   { path: "/", label: "工作台", icon: DataAnalysis },
   { path: "/vouchers", label: "凭证", icon: DocumentChecked },
+  { path: "/accounting-periods", label: "会计期间", icon: Calendar },
   { path: "/reimbursements", label: "费用报销", icon: WalletFilled },
   { path: "/invoices", label: "电子发票", icon: Document },
   { path: "/sales-invoice-requests", label: "销项开票", icon: Document },
@@ -102,7 +103,6 @@ const menuGroups: MenuGroup[] = [
     children: [
       { path: "/company-profile", label: "企业资料", icon: OfficeBuilding, adminOnly: true },
       { path: "/accounts", label: "会计科目", icon: Collection },
-      { path: "/accounting-periods", label: "会计期间", icon: Calendar },
       { path: "/dictionary", label: "数据字典", icon: Setting },
       { path: "/report-templates", label: "报表模板", icon: Setting, adminOnly: true },
       { path: "/users", label: "用户与会话", icon: UserFilled, adminOnly: true },
