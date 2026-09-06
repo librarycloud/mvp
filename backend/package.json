@@ -35,7 +35,7 @@
     "exceljs": "^4.4.0",
     "fast-jwt": "^6.2.4",
     "fast-xml-parser": "^5.10.1",
-    "fastify": "^5.11.0",
+    "fastify": "^5.12.3",
     "jszip": "^3.10.1",
     "openai": "^6.46.0",
     "pdfkit": "^0.19.1",
@@ -51,6 +51,9 @@
   "overrides": {
     "exceljs": {
       "uuid": "^11.1.1"
-    }
+    },
+    "mariadb": "^3.4.7",
+    "mysql2": "^3.24.3",
+    "deepmerge-ts": "^8.0.2"
   }
 }
