@@ -13,6 +13,11 @@ export class FakeVoucherRepository implements VoucherRepository {
   suggestions = new Map<number, AiSuggestionForVoucher>();
   attachments: unknown[] = [];
   sequence = 1;
+  operationMode: "SIMPLE" | "STANDARD" = "STANDARD";
+
+  async findOperationMode() {
+    return this.operationMode;
+  }
 
   async findAccountsForPosting(ids: number[]) {
     return new Set(ids.filter((id) => this.postableAccounts.has(id)));

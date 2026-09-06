@@ -78,8 +78,9 @@ export class VoucherService {
   async review(id: number, actor: VoucherActor) {
     this.assertAdmin(actor);
     const current = await this.getByStatus(id, VOUCHER_STATUS.PENDING);
-    if (process.env.ENFORCE_SOD !== "false" && current.createdById === actor.actorId) {
-      throw new AppError("SOD_VIOLATION", "制单人不能审核自己填制的凭证", 403);
+    const operationMode = (await this.repository.findOperationMode?.()) ?? "STANDARD";
+    if (operationMode === "STANDARD" && process.env.ENFORCE_SOD !== "false" && current.createdById === actor.actorId) {
+      throw new AppError("SOD_VIOLATION", "标准模式下，制单人不能审核自己填制的凭证。如需单人操作，请在企业资料中切换为简易模式或由其他管理员审核", 403);
     }
     await this.validateStoredBalance(current);
     return this.repository.changeStatus(current, VOUCHER_STATUS.PENDING, actor);

@@ -225,7 +225,7 @@ describe("VoucherService", () => {
     expect(redVoucher).toMatchObject({ totalDebit: "-50", totalCredit: "-50" });
   });
 
-  it("enforces segregation of duties (SoD): creator cannot review own voucher", async () => {
+  it("enforces segregation of duties (SoD): creator cannot review own voucher in STANDARD mode", async () => {
     const { service } = setup();
     const creatorAdmin = { actorId: 99, role: "ADMIN" as const };
     const voucher = (await service.createManual(
@@ -235,5 +235,18 @@ describe("VoucherService", () => {
 
     await service.submit(voucher.id, creatorAdmin);
     await expect(service.review(voucher.id, creatorAdmin)).rejects.toMatchObject({ code: "SOD_VIOLATION" });
+  });
+
+  it("allows creator to review own voucher in SIMPLE mode", async () => {
+    const { repository, service } = setup();
+    repository.operationMode = "SIMPLE";
+    const creatorAdmin = { actorId: 99, role: "ADMIN" as const };
+    const voucher = (await service.createManual(
+      { voucherDate: new Date(2026, 6, 1), summary: "简易模式自审测试", entries: balancedEntries },
+      creatorAdmin,
+    )) as { id: number };
+
+    await service.submit(voucher.id, creatorAdmin);
+    await expect(service.review(voucher.id, creatorAdmin)).resolves.toBeDefined();
   });
 });

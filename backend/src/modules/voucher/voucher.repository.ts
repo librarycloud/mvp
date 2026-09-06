@@ -10,6 +10,7 @@ export interface VoucherRepository {
   findAccountsForPosting(ids: number[]): Promise<Set<number>>;
   findForMutation(id: number): Promise<VoucherMutationRecord | null>;
   findManagedSource?(id: number): Promise<{ eventType: string; sourceType: string | null } | null>;
+  findOperationMode?(): Promise<"SIMPLE" | "STANDARD">;
   findSuggestion(id: number): Promise<AiSuggestionForVoucher | null>;
   listActiveEntriesForReview(
     id: number,

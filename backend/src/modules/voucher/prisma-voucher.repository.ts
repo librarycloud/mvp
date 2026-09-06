@@ -55,6 +55,14 @@ export class PrismaVoucherRepository implements VoucherRepository {
     });
   }
 
+  async findOperationMode(): Promise<"SIMPLE" | "STANDARD"> {
+    const profile = await this.prisma.companyProfile.findFirst({
+      where: { deletedAt: null },
+      select: { operationMode: true },
+    });
+    return profile?.operationMode ?? "SIMPLE";
+  }
+
   findSuggestion(id: number): Promise<AiSuggestionForVoucher | null> {
     return this.prisma.aiSuggestion.findFirst({
       where: { id, deletedAt: null },
