@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { Type } from "@sinclair/typebox";
 import { unauthorized } from "../../common/errors/app-error.js";
 import type { BankReconciliationController } from "./bank-reconciliation.controller.js";
-import { DirectionBody, IdParams, MatchBody, ReconciliationBody, ReconciliationQuery, ReconciliationUpdateBody } from "./dto/bank-reconciliation.dto.js";
+import { DirectionBody, IdParams, MatchBody, PreviousClosingQuery, ReconciliationBody, ReconciliationQuery, ReconciliationUpdateBody } from "./dto/bank-reconciliation.dto.js";
 
 const DirectionParams = Type.Object({ id: Type.Integer({ minimum: 1 }), transactionId: Type.Integer({ minimum: 1 }) });
 
@@ -10,6 +10,7 @@ async function auth(request: FastifyRequest) { await request.jwtVerify(); if (re
 export async function bankReconciliationRoutes(app: FastifyInstance, options: { controller: BankReconciliationController }) {
   const c = options.controller; const secure = { preHandler: auth };
   app.get("/", { ...secure, schema: { tags: ["银行对账"], querystring: ReconciliationQuery }, handler: c.list });
+  app.get("/previous-closing", { ...secure, schema: { tags: ["银行对账"], querystring: PreviousClosingQuery }, handler: c.previousClosingBalance });
   app.post("/", { ...secure, schema: { tags: ["银行对账"], body: ReconciliationBody }, handler: c.create });
   app.get("/:id", { ...secure, schema: { tags: ["银行对账"], params: IdParams }, handler: c.detail });
   app.put("/:id", { ...secure, schema: { tags: ["银行对账"], params: IdParams, body: ReconciliationUpdateBody }, handler: c.update });

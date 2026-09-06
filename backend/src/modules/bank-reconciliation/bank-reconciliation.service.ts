@@ -68,6 +68,50 @@ export class BankReconciliationService {
     });
   }
 
+  async getPreviousClosingBalance(periodId: number, bankAccountId: number) {
+    const period = await this.prisma.accountingPeriod.findFirst({
+      where: { id: periodId, deletedAt: null },
+    });
+    if (!period) throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND", "会计期间不存在", 404);
+
+    const previous = await this.prisma.bankReconciliation.findFirst({
+      where: {
+        bankAccountId,
+        deletedAt: null,
+        period: {
+          deletedAt: null,
+          OR: [
+            { year: { lt: period.year } },
+            { year: period.year, month: { lt: period.month } },
+          ],
+        },
+      },
+      include: {
+        period: { select: { id: true, periodCode: true, year: true, month: true } },
+      },
+      orderBy: [
+        { period: { year: "desc" } },
+        { period: { month: "desc" } },
+      ],
+    });
+
+    if (!previous) {
+      return {
+        hasPrevious: false,
+        periodId: null,
+        periodCode: null,
+        statementClosingBalance: null,
+      };
+    }
+
+    return {
+      hasPrevious: true,
+      periodId: previous.period.id,
+      periodCode: previous.period.periodCode,
+      statementClosingBalance: previous.statementClosingBalance.toString(),
+    };
+  }
+
   async detail(id: number) {
     const row = await this.require(id);
     const [transactions, entries, matches, profile, currentBookClosing, unpostedBankEntryCount] = await Promise.all([

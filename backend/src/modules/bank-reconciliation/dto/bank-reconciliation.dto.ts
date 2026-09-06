@@ -20,6 +20,10 @@ export const ReconciliationQuery = Type.Object({
   bankAccountId: Type.Optional(Type.Integer({ minimum: 1 })),
   status: Type.Optional(Type.Integer({ minimum: 0, maximum: 1 })),
 });
+export const PreviousClosingQuery = Type.Object({
+  periodId: Type.Integer({ minimum: 1 }),
+  bankAccountId: Type.Integer({ minimum: 1 }),
+});
 export const MatchBody = Type.Object({
   bankTransactionId: Type.Integer({ minimum: 1 }),
   voucherEntryId: Type.Integer({ minimum: 1 }),

@@ -78,3 +78,65 @@ describe("BankReconciliationService update", () => {
     )).rejects.toMatchObject({ code: "BANK_RECONCILIATION_COMPLETED" });
   });
 });
+
+describe("BankReconciliationService getPreviousClosingBalance", () => {
+  it("throws when accounting period is not found", async () => {
+    const prisma: any = {
+      accountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const service = new BankReconciliationService(prisma);
+    await expect(service.getPreviousClosingBalance(999, 1)).rejects.toMatchObject({
+      code: "ACCOUNTING_PERIOD_NOT_FOUND",
+    });
+  });
+
+  it("returns hasPrevious: false when no prior statement exists", async () => {
+    const prisma: any = {
+      accountingPeriod: {
+        findFirst: vi.fn().mockResolvedValue({ id: 10, year: 2026, month: 8, periodCode: "2026-08" }),
+      },
+      bankReconciliation: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+    };
+    const service = new BankReconciliationService(prisma);
+    const result = await service.getPreviousClosingBalance(10, 1);
+    expect(result).toEqual({
+      hasPrevious: false,
+      periodId: null,
+      periodCode: null,
+      statementClosingBalance: null,
+    });
+    expect(prisma.bankReconciliation.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        bankAccountId: 1,
+        deletedAt: null,
+      }),
+    }));
+  });
+
+  it("returns prior statement closing balance when found", async () => {
+    const prisma: any = {
+      accountingPeriod: {
+        findFirst: vi.fn().mockResolvedValue({ id: 10, year: 2026, month: 8, periodCode: "2026-08" }),
+      },
+      bankReconciliation: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 5,
+          periodId: 9,
+          statementClosingBalance: new Prisma.Decimal("123456.78"),
+          period: { id: 9, periodCode: "2026-07", year: 2026, month: 7 },
+        }),
+      },
+    };
+    const service = new BankReconciliationService(prisma);
+    const result = await service.getPreviousClosingBalance(10, 1);
+    expect(result).toEqual({
+      hasPrevious: true,
+      periodId: 9,
+      periodCode: "2026-07",
+      statementClosingBalance: "123456.78",
+    });
+  });
+});
+
