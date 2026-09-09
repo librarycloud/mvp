@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Prisma } from "../src/generated/prisma/client.js";
 import { BankFileParser } from "../src/modules/bank-transaction/bank-file-parser.js";
 import { BankTransactionService } from "../src/modules/bank-transaction/bank-transaction.service.js";
 import { FakeBankTransactionRepository } from "./helpers/fake-bank-transaction-repository.js";
@@ -90,5 +91,53 @@ describe("BankTransactionService", () => {
     expect(secondRequest.TRANSQUERYBYBREAKPOINT_X1[0].queryAcctNbr).toBe("TEST-CORPORATE-ACCOUNT");
     expect(secondRequest.TRANSQUERYBYBREAKPOINT_Y1).toHaveLength(1);
   });
+
+  it("generates a voucher from bank transaction with bank account and counter account", async () => {
+    const createdVoucher = { id: 200, voucherNo: "2026-000002" };
+    const tx = {
+      $executeRaw: async () => 1,
+      $queryRaw: async () => [{ next_value: 2 }],
+      voucherSequence: { update: async () => {} },
+      bankTransaction: {
+        findFirst: async () => ({
+          id: 1,
+          amount: new Prisma.Decimal("500.00"),
+          transactionNo: "BT-20260715-001",
+          transactionDate: new Date("2026-07-15"),
+          transactionTime: new Date("2026-07-15T10:00:00.000Z"),
+          summary: "收到货款",
+          voucherId: null,
+        }),
+        update: async () => {},
+      },
+      account: {
+        findFirst: async ({ where }: any) => {
+          if (where.id === 1122) return { id: 1122, code: "1122", name: "应收账款" };
+          const prefix = typeof where.code === "object" ? where.code?.startsWith : where.code;
+          if (prefix?.startsWith?.("1002") || prefix === "1002") return { id: 1002, code: "1002", name: "银行存款" };
+          return null;
+        },
+      },
+      voucher: {
+        create: async ({ data }: any) => {
+          expect(data.totalDebit.toString()).toBe("500");
+          expect(data.entries.create).toHaveLength(2);
+          expect(data.entries.create[0].accountId).toBe(1002);
+          expect(data.entries.create[0].debitAmount.toString()).toBe("500");
+          expect(data.entries.create[1].accountId).toBe(1122);
+          expect(data.entries.create[1].creditAmount.toString()).toBe("500");
+          return createdVoucher;
+        },
+      },
+      voucherSource: { create: async () => {} },
+      accountingEvent: { create: async () => {} },
+    };
+    const prisma = { $transaction: async (work: any) => work(tx) } as any;
+    const service = new BankTransactionService(new FakeBankTransactionRepository(), new BankFileParser(), new MemoryFileStorage(), undefined, undefined, undefined, prisma);
+
+    const voucher = await service.generateVoucher(1, 1122, "收到客户货款", { actorId: 1, role: "CASHIER" });
+    expect(voucher).toEqual(createdVoucher);
+  });
 });
+
 

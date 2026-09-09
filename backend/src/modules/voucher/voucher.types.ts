@@ -39,6 +39,7 @@ export interface VoucherActor {
 export interface VoucherMutationRecord {
   id: number;
   voucherNo: string;
+  sequenceNo?: number;
   status: number;
   createdById: number;
   summary: string;

@@ -31,6 +31,10 @@ export class ArApController {
   payableSummary = async (_: FastifyRequest, p: FastifyReply) => sendSuccess(p, await this.service.summary("payable"));
   receivableAging = (r: FastifyRequest<{ Querystring: { asOf?: string } }>, p: FastifyReply) => this.aging("receivable", r, p);
   payableAging = (r: FastifyRequest<{ Querystring: { asOf?: string } }>, p: FastifyReply) => this.aging("payable", r, p);
+  receivableAgingMatrix = (r: FastifyRequest<{ Querystring: { asOf?: string } }>, p: FastifyReply) => this.agingMatrix("receivable", r, p);
+  payableAgingMatrix = (r: FastifyRequest<{ Querystring: { asOf?: string } }>, p: FastifyReply) => this.agingMatrix("payable", r, p);
+  statementOfAccount = async (r: FastifyRequest<{ Querystring: { partyId: number; kind: ArApPartyKind; startDate: string; endDate: string } }>, p: FastifyReply) =>
+    sendSuccess(p, await this.service.statementOfAccount(r.query.partyId, r.query.kind, new Date(`${r.query.startDate}T00:00:00.000Z`), new Date(`${r.query.endDate}T23:59:59.999Z`)));
   followUps = async (r: FastifyRequest<{ Querystring: { status?: number; due?: "today" | "overdue" | "all" } }>, p: FastifyReply) => sendSuccess(p, await this.service.listFollowUps(r.query));
   createFollowUp = async (r: FastifyRequest<{ Body: FollowUpInput }>, p: FastifyReply) => sendSuccess(p, await this.service.createFollowUp(r.body, { actorId: Number(r.user.sub), role: r.user.role }), "跟进任务已创建", 201);
   completeFollowUp = async (r: FastifyRequest<{ Params: { id: number }; Body: { result: string } }>, p: FastifyReply) => sendSuccess(p, await this.service.completeFollowUp(r.params.id, r.body.result, { actorId: Number(r.user.sub), role: r.user.role }), "跟进任务已完成");
@@ -40,4 +44,5 @@ export class ArApController {
   private async cancelSettlement(kind: ArApDocumentKind, r: FastifyRequest<{ Params: { id: number }; Body: { reason: string } }>, p: FastifyReply) { return sendSuccess(p, await this.service.cancelSettlement(kind, r.params.id, r.body.reason, { actorId: Number(r.user.sub), role: r.user.role }), kind === "receivable" ? "收款核销已撤销" : "付款核销已撤销"); }
   private async matches(kind: ArApDocumentKind, r: FastifyRequest<{ Params: { id: number } }>, p: FastifyReply) { return sendSuccess(p, await this.service.bankMatches(kind, r.params.id)); }
   private async aging(kind: ArApDocumentKind, r: FastifyRequest<{ Querystring: { asOf?: string } }>, p: FastifyReply) { return sendSuccess(p, await this.service.aging(kind, r.query.asOf ? new Date(`${r.query.asOf}T00:00:00.000Z`) : new Date())); }
+  private async agingMatrix(kind: ArApDocumentKind, r: FastifyRequest<{ Querystring: { asOf?: string } }>, p: FastifyReply) { return sendSuccess(p, await this.service.agingMatrix(kind, r.query.asOf ? new Date(`${r.query.asOf}T00:00:00.000Z`) : new Date())); }
 }

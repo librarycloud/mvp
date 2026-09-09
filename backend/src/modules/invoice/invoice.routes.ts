@@ -95,6 +95,23 @@ export async function invoiceRoutes(app: FastifyInstance, options: { controller:
   app.post("/:id/red-letter", { preHandler: authenticateAdmin, schema: { tags: ["电子发票"], summary: "关联红字发票", security: [{ bearerAuth: [] }], params: InvoiceParamsSchema, body: Type.Object({ redInvoiceId: Type.Integer({ minimum: 1 }) }) }, handler: options.controller.linkRedLetter });
   app.post("/:id/vouchers", { preHandler: authenticateAdmin, schema: { tags: ["电子发票"], summary: "关联已有记账凭证", security: [{ bearerAuth: [] }], params: InvoiceParamsSchema, body: InvoiceVoucherBodySchema, response: { 200: success(InvoiceDetailSchema) } }, handler: options.controller.linkVoucher });
   app.delete("/:id/vouchers/:voucherId", { preHandler: authenticateAdmin, schema: { tags: ["电子发票"], summary: "解除已有凭证关联", security: [{ bearerAuth: [] }], params: InvoiceVoucherParamsSchema, response: { 200: success(InvoiceDetailSchema) } }, handler: options.controller.unlinkVoucher });
+  app.post("/:id/generate-voucher", {
+    preHandler: authenticateEditor,
+    schema: {
+      tags: ["电子发票"],
+      summary: "发票一键生成记账凭证",
+      security: [{ bearerAuth: [] }],
+      params: InvoiceParamsSchema,
+      body: Type.Optional(
+        Type.Object({
+          expenseOrRevenueAccountId: Type.Optional(Type.Integer({ minimum: 1 })),
+          settlementAccountId: Type.Optional(Type.Integer({ minimum: 1 })),
+          summary: Type.Optional(Type.String({ maxLength: 500 })),
+        }),
+      ),
+    },
+    handler: options.controller.generateVoucher,
+  });
   app.get("/sales-requests", { preHandler: authenticate, schema: { tags: ["销项开票"], security: [{ bearerAuth: [] }] }, handler: options.controller.listSalesRequests });
   app.post("/sales-requests", { preHandler: authenticate, schema: { tags: ["销项开票"], security: [{ bearerAuth: [] }], body: Type.Object({ buyerName: Type.String({ minLength: 1, maxLength: 200 }), buyerIdNum: Type.String({ minLength: 1, maxLength: 64 }), invoiceType: Type.Union([Type.Literal("SPECIAL"), Type.Literal("ORDINARY")]), amountWithoutTax: Type.String({ pattern: "^\\d{1,15}(?:\\.\\d{1,4})?$" }), taxAmount: Type.String({ pattern: "^\\d{1,15}(?:\\.\\d{1,4})?$" }), items: Type.Optional(Type.Any()), remark: Type.Optional(Type.String({ maxLength: 500 })) }) }, handler: options.controller.createSalesRequest });
   app.post("/sales-requests/:id/approve", { preHandler: authenticateAdmin, schema: { tags: ["销项开票"], security: [{ bearerAuth: [] }], params: Type.Object({ id: Type.Integer({ minimum: 1 }) }) }, handler: options.controller.approveSalesRequest });

@@ -66,6 +66,23 @@ export class InvoiceController {
     sendSuccess(reply, await this.service.linkVoucher(request.params.id, request.body.voucherId, Number(request.user.sub)), "凭证关联成功");
   unlinkVoucher = async (request: FastifyRequest<{ Params: { id: number; voucherId: number } }>, reply: FastifyReply) =>
     sendSuccess(reply, await this.service.unlinkVoucher(request.params.id, request.params.voucherId, Number(request.user.sub)), "凭证关联已解除");
+  generateVoucher = async (
+    request: FastifyRequest<{
+      Params: InvoiceParams;
+      Body: { expenseOrRevenueAccountId?: number; settlementAccountId?: number; summary?: string };
+    }>,
+    reply: FastifyReply,
+  ) =>
+    sendSuccess(
+      reply,
+      await this.service.generateVoucher(
+        request.params.id,
+        request.body ?? {},
+        { actorId: Number(request.user.sub), role: request.user.role },
+      ),
+      "记账凭证已自动生成",
+      201,
+    );
   listSalesRequests = async (_request: FastifyRequest, reply: FastifyReply) => sendSuccess(reply, await this.service.listSalesRequests());
   createSalesRequest = async (request: FastifyRequest<{ Body: { buyerName: string; buyerIdNum: string; invoiceType: "SPECIAL" | "ORDINARY"; amountWithoutTax: string; taxAmount: string; items?: unknown; remark?: string } }>, reply: FastifyReply) => sendSuccess(reply, await this.service.createSalesRequest(request.body, Number(request.user.sub)), "销项开票申请已提交", 201);
   approveSalesRequest = async (request: FastifyRequest<{ Params: { id: number } }>, reply: FastifyReply) => sendSuccess(reply, await this.service.approveSalesRequest(request.params.id, Number(request.user.sub)), "销项开票申请已审批");

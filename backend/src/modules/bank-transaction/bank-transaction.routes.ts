@@ -11,6 +11,7 @@ import {
   BankTransactionParamsSchema,
   BankTransactionQuerySchema,
   BankTransactionSchema,
+  BankGenerateVoucherBodySchema,
 } from "./dto/bank-transaction.dto.js";
 
 const success = <T extends TSchema>(data: T) =>
@@ -129,5 +130,17 @@ export async function bankTransactionRoutes(
       response: { 200: success(BankTransactionSchema) },
     },
     handler: options.controller.linkVoucher,
+  });
+
+  app.post("/:id/generate-voucher", {
+    preHandler: operateBank,
+    schema: {
+      tags: ["银行流水"],
+      summary: "银行流水一键生成记账凭证",
+      security: [{ bearerAuth: [] }],
+      params: BankTransactionParamsSchema,
+      body: BankGenerateVoucherBodySchema,
+    },
+    handler: options.controller.generateVoucher,
   });
 }

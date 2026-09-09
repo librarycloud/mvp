@@ -79,4 +79,11 @@ export class FakeBankTransactionRepository implements BankTransactionRepository 
       reconciledAmount: "0",
     } : null;
   }
+
+  async linkVoucher(transactionId: number, voucherId: number, _actorId: number): Promise<void> {
+    const item = this.transactions.find((t) => t.id === transactionId);
+    if (item) {
+      item.voucherId = voucherId;
+    }
+  }
 }

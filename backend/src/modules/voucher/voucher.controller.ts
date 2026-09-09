@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { AppError } from "../../common/errors/app-error.js";
 import { sendSuccess } from "../../common/http/response.js";
 import type { VoucherService } from "./voucher.service.js";
+import type { VoucherImportService } from "./voucher-import.service.js";
 import type { VoucherActor, VoucherFilter } from "./voucher.types.js";
 import type {
   VoucherAttachmentParams,
@@ -13,7 +14,28 @@ import type {
 } from "./dto/voucher.dto.js";
 
 export class VoucherController {
-  constructor(private readonly service: VoucherService) {}
+  constructor(
+    private readonly service: VoucherService,
+    private readonly importService?: VoucherImportService,
+  ) {}
+
+  downloadImportTemplate = async (_request: FastifyRequest, reply: FastifyReply) => {
+    if (!this.importService) throw new AppError("SERVICE_UNAVAILABLE", "凭证导入服务不可用", 503);
+    const buffer = await this.importService.generateTemplate();
+    reply.header("content-type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    reply.header("content-disposition", 'attachment; filename="voucher-import-template.xlsx"');
+    return reply.send(buffer);
+  };
+
+  importVouchers = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!this.importService) throw new AppError("SERVICE_UNAVAILABLE", "凭证导入服务不可用", 503);
+    const upload = await request.file({ limits: { fileSize: 20 * 1024 * 1024, files: 1 } });
+    if (!upload) throw new AppError("FILE_REQUIRED", "请上传凭证导入文件", 400);
+    const ext = upload.filename.toLowerCase().endsWith(".csv") ? "csv" : "xlsx";
+    const buffer = await upload.toBuffer();
+    const result = await this.importService.importVouchers(buffer, ext, this.actor(request));
+    return sendSuccess(reply, result, `成功批量导入 ${result.totalImported} 张凭证`, 201);
+  };
 
   create = async (request: FastifyRequest<{ Body: VoucherWriteBody }>, reply: FastifyReply) =>
     sendSuccess(reply, await this.service.createManual(this.writeInput(request.body), this.actor(request)), "凭证创建成功", 201);
@@ -94,6 +116,32 @@ export class VoucherController {
 
   getById = async (request: FastifyRequest<{ Params: VoucherParams }>, reply: FastifyReply) =>
     sendSuccess(reply, await this.service.getById(request.params.id));
+
+  reorder = async (
+    request: FastifyRequest<{ Body: { fiscalYear: number; fiscalPeriod?: number } }>,
+    reply: FastifyReply,
+  ) =>
+    sendSuccess(
+      reply,
+      await this.service.reorder(request.body.fiscalYear, request.body.fiscalPeriod, this.actor(request)),
+      "凭证序号重排完成",
+    );
+
+  cashierSign = async (request: FastifyRequest<{ Params: VoucherParams }>, reply: FastifyReply) =>
+    sendSuccess(reply, await this.service.cashierSign(request.params.id, this.actor(request)), "出纳签字成功");
+
+  cashierJournal = async (
+    request: FastifyRequest<{ Querystring: { accountCode?: string; startDate: string; endDate: string } }>,
+    reply: FastifyReply,
+  ) =>
+    sendSuccess(
+      reply,
+      await this.service.cashierJournal({
+        ...(request.query.accountCode ? { accountCode: request.query.accountCode } : {}),
+        startDate: this.date(request.query.startDate),
+        endDate: new Date(`${request.query.endDate}T23:59:59.999Z`),
+      }),
+    );
 
   addAttachment = async (
     request: FastifyRequest<{ Params: VoucherAttachmentParams }>,

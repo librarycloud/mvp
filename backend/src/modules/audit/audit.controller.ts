@@ -1,6 +1,8 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { sendSuccess } from "../../common/http/response.js";
+import { AppError } from "../../common/errors/app-error.js";
 import type { AuditFilter, AuditService } from "./audit.service.js";
+import type { AuditArchiveService } from "./audit-archive.service.js";
 
 interface AuditQuery {
   page?: number;
@@ -13,11 +15,36 @@ interface AuditQuery {
   endAt?: string;
 }
 
+interface ArchiveQuery {
+  fiscalYear?: number;
+  download?: boolean;
+}
+
 export class AuditController {
-  constructor(private readonly service: AuditService) {}
+  constructor(
+    private readonly service: AuditService,
+    private readonly archiveService?: AuditArchiveService,
+  ) {}
 
   list = async (request: FastifyRequest<{ Querystring: AuditQuery }>, reply: FastifyReply) =>
     sendSuccess(reply, await this.service.list(this.filter(request.query)));
+
+  exportArchive = async (
+    request: FastifyRequest<{ Querystring: ArchiveQuery }>,
+    reply: FastifyReply,
+  ) => {
+    if (!this.archiveService) {
+      throw new AppError("SERVICE_UNAVAILABLE", "归档服务不可用", 503);
+    }
+    const fiscalYear = Number(request.query.fiscalYear) || new Date().getFullYear();
+    const data = await this.archiveService.generateArchive(fiscalYear);
+    if (request.query.download) {
+      reply.header("content-type", "application/json; charset=utf-8");
+      reply.header("content-disposition", `attachment; filename="GBT24589-Archive-${fiscalYear}.json"`);
+      return reply.send(JSON.stringify(data, null, 2));
+    }
+    return sendSuccess(reply, data);
+  };
 
   exportCsv = async (request: FastifyRequest<{ Querystring: AuditQuery }>, reply: FastifyReply) => {
     const result = await this.service.list({ ...this.filter(request.query), page: 1, pageSize: 10000 });

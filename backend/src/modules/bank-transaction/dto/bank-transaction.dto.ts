@@ -129,3 +129,9 @@ export type BankTransactionQuery = Static<typeof BankTransactionQuerySchema>;
 export type BankFetchBody = Static<typeof BankFetchBodySchema>;
 export type SavedBankFetchConfig = Static<typeof BankFetchConfigSchema>;
 export type SavedBankFetchConfigView = Static<typeof SavedBankFetchConfigSchema>;
+
+export const BankGenerateVoucherBodySchema = Type.Object({
+  counterAccountId: Type.Integer({ minimum: 1 }),
+  summary: Type.Optional(Type.String({ maxLength: 500 })),
+});
+export type BankGenerateVoucherBody = Static<typeof BankGenerateVoucherBodySchema>;

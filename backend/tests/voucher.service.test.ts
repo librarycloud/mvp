@@ -249,4 +249,49 @@ describe("VoucherService", () => {
     await service.submit(voucher.id, creatorAdmin);
     await expect(service.review(voucher.id, creatorAdmin)).resolves.toBeDefined();
   });
+
+  it("reorders vouchers to fix sequence gaps", async () => {
+    const { repository, service } = setup();
+    const v1 = (await service.createManual(
+      { voucherDate: new Date(2026, 6, 1), summary: "凭证1", entries: balancedEntries },
+      user,
+    )) as { id: number; sequenceNo: number };
+    const v2 = (await service.createManual(
+      { voucherDate: new Date(2026, 6, 2), summary: "凭证2", entries: balancedEntries },
+      user,
+    )) as { id: number; sequenceNo: number };
+
+    // Simulate gap by changing sequenceNo of v2 to 5
+    repository.vouchers.get(v2.id)!.sequenceNo = 5;
+
+    const result = await service.reorder(2026, undefined, admin);
+    expect(result).toMatchObject({ totalReordered: 2, gapsFixed: 1 });
+    expect(repository.vouchers.get(v2.id)!.sequenceNo).toBe(2);
+  });
+
+  it("allows cashier to sign vouchers with cash or bank entries", async () => {
+    const { service } = setup();
+    const cashier = { actorId: 3, role: "CASHIER" as const };
+    const signResult = await service.cashierSign(100, cashier);
+    expect(signResult).toMatchObject({ voucherId: 100, signed: true, cashierId: 3 });
+
+    // Non-cashier/manager/admin cannot sign
+    const unauthorizedUser = { actorId: 4, role: "EMPLOYEE" as const };
+    await expect(service.cashierSign(100, unauthorizedUser as any)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("queries cashier journal for cash or bank transactions", async () => {
+    const { service } = setup();
+    const journal = await service.cashierJournal({
+      accountCode: "1002",
+      startDate: new Date(2026, 6, 1),
+      endDate: new Date(2026, 6, 31),
+    });
+    expect(journal).toMatchObject({
+      accountCode: "1002",
+      openingBalance: "1000",
+      closingBalance: "1300",
+    });
+  });
 });
+

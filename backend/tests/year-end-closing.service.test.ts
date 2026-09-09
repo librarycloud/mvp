@@ -23,4 +23,41 @@ describe("YearEndClosingService", () => {
     expect(result.netProfit.toString()).toBe("-50");
     expect(query.where.voucher.accountingEvents.none.eventType).toBe("YEAR_END");
   });
+
+  it("generates balanced closing voucher for monthly P&L", async () => {
+    const mockVoucher = { id: 888 };
+    const mockTx = {
+      accountingPeriod: {
+        findFirst: async () => ({ id: 10, year: 2026, month: 7, periodCode: "2026-07", status: 0, endDate: new Date("2026-07-31") }),
+      },
+      account: {
+        findFirst: async () => ({ id: 4103, code: "4103", name: "本年利润" }),
+      },
+      voucherEntry: {
+        findMany: async () => [
+          { accountId: 6001, debitAmount: new Prisma.Decimal(0), creditAmount: new Prisma.Decimal(1000), account: { id: 6001, code: "6001", name: "主营业务收入", category: "PROFIT_AND_LOSS", normalDirection: "CREDIT" } },
+          { accountId: 6602, debitAmount: new Prisma.Decimal(400), creditAmount: new Prisma.Decimal(0), account: { id: 6602, code: "6602", name: "管理费用", category: "PROFIT_AND_LOSS", normalDirection: "DEBIT" } },
+        ],
+      },
+      voucher: {
+        create: async (data: any) => ({ ...mockVoucher, ...data.data }),
+      },
+      accountingEvent: {
+        create: async () => ({ id: 1 }),
+      },
+      $executeRaw: async () => 1,
+      $queryRaw: async () => [{ next_value: 1 }],
+      voucherSequence: { update: async () => ({}) },
+    };
+
+    const mockPrisma = {
+      $transaction: async (fn: any) => fn(mockTx),
+    };
+
+    const service = new YearEndClosingService(mockPrisma as any);
+    const voucher = await service.closeMonthlyPnl(10, 4103, { actorId: 1, role: "ADMIN" });
+    expect(voucher.id).toBe(888);
+    expect(voucher.totalDebit.toString()).toBe("1400");
+    expect(voucher.totalCredit.toString()).toBe("1400");
+  });
 });

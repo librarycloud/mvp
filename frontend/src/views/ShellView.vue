@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  ArrowDown,
   Box,
   Calendar,
   CircleCheck,
@@ -126,7 +127,82 @@ function toggleDesktopMenu() {
   localStorage.setItem(sidebarCollapsedStorageKey, desktopMenuCollapsed.value ? "1" : "0");
 }
 
-watch(() => router.currentRoute.value.fullPath, closeMobileMenu);
+// 多标签工作区 (Multi-Tab Workspace)
+interface TabItem {
+  path: string;
+  fullPath: string;
+  title: string;
+  closable: boolean;
+}
+
+const tabs = ref<TabItem[]>([
+  { path: "/", fullPath: "/", title: "工作台", closable: false },
+]);
+const activeTab = ref("/");
+
+function getTabTitle(path: string, metaTitle?: unknown): string {
+  if (metaTitle && typeof metaTitle === "string") return metaTitle;
+  const primary = primaryMenu.find((m) => m.path === path);
+  if (primary) return primary.label;
+  for (const g of menuGroups) {
+    const child = g.children.find((c) => c.path === path);
+    if (child) return child.label;
+  }
+  return "工作区";
+}
+
+watch(
+  () => router.currentRoute.value,
+  (route) => {
+    closeMobileMenu();
+    const path = route.path;
+    const fullPath = route.fullPath;
+    activeTab.value = path;
+    const existing = tabs.value.find((t) => t.path === path);
+    if (existing) {
+      existing.fullPath = fullPath;
+    } else {
+      const title = getTabTitle(path, route.meta?.title);
+      tabs.value.push({
+        path,
+        fullPath,
+        title,
+        closable: path !== "/",
+      });
+    }
+  },
+  { immediate: true },
+);
+
+function switchTab(tabPath: string) {
+  const target = tabs.value.find((t) => t.path === tabPath);
+  if (target && target.fullPath !== router.currentRoute.value.fullPath) {
+    router.push(target.fullPath);
+  }
+}
+
+function removeTab(tabPath: string) {
+  const index = tabs.value.findIndex((t) => t.path === tabPath);
+  if (index === -1) return;
+  const isClosingActive = activeTab.value === tabPath;
+  tabs.value.splice(index, 1);
+  if (isClosingActive) {
+    const nextTab = tabs.value[index] || tabs.value[index - 1] || tabs.value[0];
+    if (nextTab) {
+      router.push(nextTab.fullPath);
+    }
+  }
+}
+
+function closeOtherTabs() {
+  tabs.value = tabs.value.filter((t) => !t.closable || t.path === activeTab.value);
+}
+
+function closeAllTabs() {
+  tabs.value = tabs.value.filter((t) => !t.closable);
+  router.push("/");
+}
+
 onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarCollapsedStorageKey) === "1"; });
 </script>
 
@@ -173,7 +249,50 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
           <el-button text :icon="SwitchButton" title="退出登录" @click="leave">退出</el-button>
         </div>
       </header>
-      <main class="content"><RouterView /></main>
+
+      <!-- Multi-Tab Workspaces Bar -->
+      <nav class="tabs-nav-bar" aria-label="工作区多标签栏">
+        <div class="tabs-list">
+          <div
+            v-for="t in tabs"
+            :key="t.path"
+            class="tab-item"
+            :class="{ active: activeTab === t.path }"
+            @click="switchTab(t.path)"
+          >
+            <span class="tab-title">{{ t.title }}</span>
+            <el-icon
+              v-if="t.closable"
+              class="tab-close"
+              title="关闭标签"
+              @click.stop="removeTab(t.path)"
+            >
+              <Close />
+            </el-icon>
+          </div>
+        </div>
+        <div class="tabs-actions">
+          <el-dropdown trigger="click">
+            <el-button text size="small" class="tab-more-btn">
+              操作 <el-icon><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="closeOtherTabs">关闭其他标签</el-dropdown-item>
+                <el-dropdown-item @click="closeAllTabs">关闭所有标签</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </nav>
+
+      <main class="content">
+        <RouterView v-slot="{ Component }">
+          <keep-alive>
+            <component :is="Component" />
+          </keep-alive>
+        </RouterView>
+      </main>
     </section>
   </div>
 </template>
@@ -182,4 +301,85 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
 .topbar-user { gap: 10px !important; }
 .topbar-user-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 800px) { .topbar-user-name { display: none; } }
+
+/* TabBar 多标签页样式 */
+.tabs-nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--el-border-color-light);
+  padding: 4px 16px 0;
+  height: 38px;
+  box-sizing: border-box;
+}
+
+.tabs-list {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  align-items: flex-end;
+  height: 100%;
+}
+.tabs-list::-webkit-scrollbar { display: none; }
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: #eef2f6;
+  border: 1px solid var(--el-border-color-lighter);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  font-size: 12px;
+  color: #64748b;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  user-select: none;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.tab-item:hover {
+  background: #e2e8f0;
+  color: var(--el-text-color-primary);
+}
+
+.tab-item.active {
+  background: #ffffff;
+  color: var(--el-color-primary);
+  font-weight: 600;
+  border-color: var(--el-border-color-light);
+  border-bottom-color: #ffffff;
+  position: relative;
+  top: 1px;
+}
+
+.tab-close {
+  font-size: 10px;
+  padding: 2px;
+  border-radius: 50%;
+  color: #94a3b8;
+  transition: all 0.15s ease;
+}
+
+.tab-close:hover {
+  background: #cbd5e1;
+  color: #0f172a;
+}
+
+.tabs-actions {
+  display: flex;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.tab-more-btn {
+  font-size: 12px;
+  color: #64748b;
+  padding: 2px 8px;
+}
 </style>

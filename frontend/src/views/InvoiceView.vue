@@ -225,6 +225,56 @@ async function verifyInvoice() { if (!detail.value) return; detail.value = await
 async function voidInvoice() { if (!detail.value) return; await ElMessageBox.confirm("作废后发票不能再用于报销或入账，确认继续？", "作废发票"); detail.value = await api.post(`/invoices/${detail.value.id}/void`); await load(); ElMessage.success("发票已作废"); }
 async function linkRedLetter() { if (!detail.value) return; const result = await ElMessageBox.prompt("输入已导入红字发票的编号", "关联红字发票", { inputPattern: /^\d+$/, inputErrorMessage: "请输入发票记录编号" }); await api.post(`/invoices/${detail.value.id}/red-letter`, { redInvoiceId: Number(result.value) }); detail.value = await api.get(`/invoices/${detail.value.id}`); ElMessage.success("红字发票已关联"); }
 
+const generateVoucherVisible = ref(false);
+const generateLoading = ref(false);
+const targetInvoice = ref<any>(null);
+const allAccounts = ref<any[]>([]);
+const generateForm = ref({
+  expenseOrRevenueAccountId: "" as number | "",
+  settlementAccountId: "" as number | "",
+  summary: "",
+});
+
+async function ensureAccounts() {
+  if (!allAccounts.value.length) {
+    allAccounts.value = await api.get<any[]>("/accounts?isEnabled=true").catch(() => []);
+  }
+}
+
+async function openGenerateVoucher(inv: any) {
+  targetInvoice.value = inv;
+  await ensureAccounts();
+  const isPurchase = inv.direction === "PURCHASE" || (!inv.direction && inv.buyerName);
+  generateForm.value = {
+    expenseOrRevenueAccountId: "",
+    settlementAccountId: "",
+    summary: `${isPurchase ? "采购发票" : "销售发票"}-${inv.invoiceNumber}-${inv.sellerName || inv.buyerName}`,
+  };
+  generateVoucherVisible.value = true;
+}
+
+async function executeGenerateVoucher() {
+  if (!targetInvoice.value) return;
+  generateLoading.value = true;
+  try {
+    const res = await api.post<any>(`/invoices/${targetInvoice.value.id}/generate-voucher`, {
+      expenseOrRevenueAccountId: generateForm.value.expenseOrRevenueAccountId || undefined,
+      settlementAccountId: generateForm.value.settlementAccountId || undefined,
+      summary: generateForm.value.summary || undefined,
+    });
+    ElMessage.success(`记账凭证【${res.voucherNo}】已自动生成并入账！`);
+    generateVoucherVisible.value = false;
+    await load();
+    if (detailVisible.value && detail.value?.id === targetInvoice.value.id) {
+      detail.value = await api.get(`/invoices/${targetInvoice.value.id}`);
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.message || "生成记账凭证失败");
+  } finally {
+    generateLoading.value = false;
+  }
+}
+
 onMounted(async () => { await Promise.all([load(), loadProfile()]); });
 </script>
 
@@ -308,7 +358,13 @@ onMounted(async () => { await Promise.all([load(), loadProfile()]); });
         <el-table-column label="方向"><template #default="{row}"><el-tag :type="directionTypes[row.direction as Direction]">{{ directionLabels[row.direction as Direction] }}</el-tag></template></el-table-column>
         <el-table-column label="入账状态"><template #default="{row}"><el-tag :type="accountingStatusType(row)">{{ accountingStatus(row) }}</el-tag></template></el-table-column>
         <el-table-column label="抵扣处理"><template #default="{row}">{{ row.direction === 'PURCHASE' ? taxDeductionLabels[row.taxDeductionStatus as TaxDeductionStatus] : '-' }}</template></el-table-column>
-        <el-table-column label="明细"><template #default="{row}"><el-button link type="primary" @click="showDetail(row)">查看 {{ row._count?.items ?? 0 }}</el-button></template></el-table-column>
+        <el-table-column label="操作" width="160" align="center">
+          <template #default="{row}">
+            <el-button link type="primary" size="small" @click="showDetail(row)">详情</el-button>
+            <el-button v-if="!row.voucherId && !row.reimbursementId" link type="success" size="small" @click="openGenerateVoucher(row)">生单</el-button>
+            <el-button v-else-if="row.voucherId" link type="info" size="small" @click="openVoucher(row.voucherId)">查看凭证</el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load()"/>
     </el-card>
@@ -325,6 +381,38 @@ onMounted(async () => { await Promise.all([load(), loadProfile()]); });
         <el-table-column prop="message" label="失败原因" show-overflow-tooltip/>
       </el-table>
       <template #footer><el-button type="primary" @click="importErrorsVisible=false">知道了</el-button></template>
+    </el-dialog>
+
+    <!-- 发票智能生成凭证对话框 -->
+    <el-dialog v-model="generateVoucherVisible" title="发票智能生成记账凭证" width="560px" destroy-on-close>
+      <el-form label-width="120px" v-if="targetInvoice">
+        <el-alert type="info" :closable="false" style="margin-bottom: 16px;">
+          系统将自动生成包含价款、税额（销项税或进项税）与结算往来科目的标准双边借贷记账凭证。
+        </el-alert>
+        <el-form-item label="发票号码">
+          <el-input :model-value="targetInvoice.invoiceNumber" disabled />
+        </el-form-item>
+        <el-form-item label="价税合计">
+          <el-input :model-value="`¥${targetInvoice.totalTaxIncludedAmount} (税额: ¥${targetInvoice.totalTaxAmount})`" disabled />
+        </el-form-item>
+        <el-form-item label="凭证主摘要">
+          <el-input v-model="generateForm.summary" placeholder="凭证摘要" />
+        </el-form-item>
+        <el-form-item :label="targetInvoice.direction === 'PURCHASE' ? '费用/存货科目' : '营业收入科目'">
+          <el-select v-model="generateForm.expenseOrRevenueAccountId" filterable clearable placeholder="默认自动匹配 (6602/6001/1405)" style="width: 100%;">
+            <el-option v-for="a in allAccounts.filter(acc => acc.isLeaf)" :key="a.id" :label="`${a.code} ${a.name}`" :value="a.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="targetInvoice.direction === 'PURCHASE' ? '应付/结算科目' : '应收/结算科目'">
+          <el-select v-model="generateForm.settlementAccountId" filterable clearable placeholder="默认自动匹配 (2202/1122/1002)" style="width: 100%;">
+            <el-option v-for="a in allAccounts.filter(acc => acc.isLeaf)" :key="a.id" :label="`${a.code} ${a.name}`" :value="a.id" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="generateVoucherVisible = false">取消</el-button>
+        <el-button type="primary" :loading="generateLoading" @click="executeGenerateVoucher">立即生成凭证并入账</el-button>
+      </template>
     </el-dialog>
 
     <el-drawer v-model="detailVisible" title="发票详情" size="72%">
@@ -347,9 +435,15 @@ onMounted(async () => { await Promise.all([load(), loadProfile()]); });
           </el-descriptions>
           <div class="tax-actions"><el-button v-if="canVerify && detail.status !== 1 && detail.status !== 2" size="small" type="primary" @click="verifyInvoice">确认人工核验</el-button><el-button v-if="isAdmin && detail.status !== 2" size="small" @click="linkRedLetter">关联红字发票</el-button><el-button v-if="canVoid && detail.status !== 2 && !detail.reimbursementId && !detail.voucherId" size="small" type="danger" @click="voidInvoice">作废发票</el-button></div>
           <div v-if="detail.direction === 'PURCHASE'" class="tax-actions"><span>抵扣确认：</span><el-button size="small" @click="confirmDeduction(1)">全额抵扣</el-button><el-button size="small" @click="confirmDeduction(2)">不抵扣</el-button><el-button size="small" @click="confirmDeduction(3)">部分抵扣</el-button></div>
-          <div class="source-heading"><h3 class="detail-title">关联凭证</h3><el-button v-if="isAdmin && !detail.reimbursementId && detail.status !== 2" type="primary" size="small" @click="openVoucherLink">关联已有凭证</el-button></div>
-          <el-empty v-if="!detail.voucherSources?.length" description="尚未关联凭证" :image-size="60"/>
-          <el-table v-else table-layout="auto" :data="detail.voucherSources" size="small" stripe>
+          <div class="source-heading">
+            <h3 class="detail-title">关联凭证</h3>
+            <div style="display: flex; gap: 8px;">
+              <el-button v-if="!detail.voucherId && !detail.reimbursementId" type="success" size="small" @click="openGenerateVoucher(detail)">一键生成记账凭证</el-button>
+              <el-button v-if="isAdmin && !detail.reimbursementId && detail.status !== 2" type="primary" size="small" @click="openVoucherLink">关联已有凭证</el-button>
+            </div>
+          </div>
+          <el-empty v-if="!detail.voucherSources?.length && !detail.voucherId" description="尚未关联凭证" :image-size="60"/>
+          <el-table v-else-if="detail.voucherSources?.length" table-layout="auto" :data="detail.voucherSources" size="small" stripe>
             <el-table-column label="凭证号"><template #default="{row}"><el-button link type="primary" @click="openVoucher(row.voucherId)">{{ row.voucher.voucherNo }}</el-button></template></el-table-column>
             <el-table-column label="凭证日期"><template #default="{row}">{{ date(row.voucher.voucherDate) }}</template></el-table-column>
             <el-table-column prop="voucher.summary" label="摘要" show-overflow-tooltip/>

@@ -289,6 +289,78 @@ export class TaxService {
     });
   }
 
+  async accrueSurcharges(periodId: number, actor: { actorId: number; role: string }) {
+    return this.prisma.$transaction(async (tx) => {
+      const period = await tx.accountingPeriod.findFirst({ where: { id: periodId, deletedAt: null } });
+      if (!period) throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND", "会计期间不存在", 404);
+
+      const vatDeclaration = await tx.taxDeclaration.findFirst({
+        where: { fiscalYear: period.year, period: period.month, taxType: "VAT", deletedAt: null },
+      });
+
+      let vatPayable = vatDeclaration ? vatDeclaration.declaredAmount : ZERO;
+      if (vatPayable.lessThanOrEqualTo(ZERO)) {
+        const vatAccounts = await tx.account.findMany({ where: { code: { startsWith: "222101" }, deletedAt: null } });
+        const vatIds = vatAccounts.map((a) => a.id);
+        const entries = await tx.voucherEntry.findMany({
+          where: { accountId: { in: vatIds }, voucher: { periodId, status: VOUCHER_STATUS.POSTED, deletedAt: null } },
+        });
+        const netCredit = entries.reduce((sum, e) => sum.plus(e.creditAmount).minus(e.debitAmount), ZERO);
+        if (netCredit.greaterThan(0)) vatPayable = netCredit;
+      }
+
+      if (vatPayable.lessThanOrEqualTo(ZERO)) {
+        throw new AppError("NO_VAT_PAYABLE_FOR_SURCHARGES", "本期无应纳增值税额，无需计提附加税费", 400);
+      }
+
+      const urbanTax = vatPayable.mul("0.07").toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      const eduTax = vatPayable.mul("0.03").toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      const localEduTax = vatPayable.mul("0.02").toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      const totalSurcharges = urbanTax.plus(eduTax).plus(localEduTax);
+
+      const taxExpenseAcc = await tx.account.findFirst({ where: { code: "6403", deletedAt: null } }) ??
+        await tx.account.findFirst({ where: { code: { startsWith: "6403" }, deletedAt: null } });
+      const taxPayableAcc = await tx.account.findFirst({ where: { code: { startsWith: "222103" }, deletedAt: null } }) ??
+        await tx.account.findFirst({ where: { code: { startsWith: "2221" }, deletedAt: null } });
+
+      if (!taxExpenseAcc || !taxPayableAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未配置税金及附加或附加税应交科目", 400);
+
+      const sequence = await getNextVoucherNumber(tx as any, period.year);
+      const summary = `计提${period.periodCode}城建税及附加税费`;
+      const voucher = await (tx as any).voucher.create({
+        data: {
+          ...sequence,
+          fiscalYear: period.year,
+          fiscalPeriod: period.month,
+          voucherDate: period.endDate,
+          postingDate: period.endDate,
+          periodId: period.id,
+          summary,
+          sourceType: "MANUAL",
+          category: "ACCRUAL",
+          status: VOUCHER_STATUS.POSTED,
+          totalDebit: totalSurcharges,
+          totalCredit: totalSurcharges,
+          createdById: actor.actorId,
+          reviewerId: actor.actorId,
+          reviewedAt: new Date(),
+          postedById: actor.actorId,
+          postedAt: new Date(),
+          entries: {
+            create: [
+              { lineNo: 1, accountId: taxExpenseAcc.id, summary, debitAmount: totalSurcharges, creditAmount: ZERO },
+              { lineNo: 2, accountId: taxPayableAcc.id, summary: "计提城市维护建设税(7%)", debitAmount: ZERO, creditAmount: urbanTax },
+              { lineNo: 3, accountId: taxPayableAcc.id, summary: "计提教育费附加(3%)", debitAmount: ZERO, creditAmount: eduTax },
+              { lineNo: 4, accountId: taxPayableAcc.id, summary: "计提地方教育附加(2%)", debitAmount: ZERO, creditAmount: localEduTax },
+            ],
+          },
+        },
+      });
+
+      return voucher;
+    });
+  }
+
   private async changeStatus(id: number, from: "DRAFT", to: "REVIEWED", actorId: number, description: string) {
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM tax_declarations WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`;

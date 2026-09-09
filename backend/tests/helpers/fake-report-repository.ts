@@ -46,7 +46,17 @@ export class FakeReportRepository implements ReportRepository {
       template: { code: "INCOME_STATEMENT_CN_ASBE_V1", name: "测试利润表", type: "INCOME_STATEMENT", version: 1 },
       lines: input.lines.map((line, index) => ({
         id: 300 + index, reportId: 201, ...line,
-        reportItem: { itemCode: this.template!.items[index]!.itemCode, name: this.template!.items[index]!.name, lineNumber: index + 1, sortOrder: index + 1 },
+        reportItem: {
+          id: this.template!.items[index]!.id,
+          itemCode: this.template!.items[index]!.itemCode,
+          name: this.template!.items[index]!.name,
+          lineNumber: index + 1,
+          sortOrder: index + 1,
+          accountMappings: this.template!.items[index]!.mappings.map((m) => ({
+            ...m,
+            account: { id: m.accountId, code: String(m.accountId), name: `科目${m.accountId}` },
+          })),
+        },
       })),
     };
   }

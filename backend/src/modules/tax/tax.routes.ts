@@ -32,4 +32,14 @@ export async function taxRoutes(app: FastifyInstance, options: { controller: Tax
   app.get("/declarations/:id/risks", { preHandler: authenticate, schema: { tags: ["税务申报"], summary: "金税四期申报前风险自检", security: [{ bearerAuth: [] }], params: id }, handler: options.controller.inspectRisks });
   app.post("/declarations/:id/declare", { preHandler: manager, schema: { tags: ["税务申报"], security: [{ bearerAuth: [] }], params: id, body: Type.Object({ declarationNo: Type.Optional(Type.String({ maxLength: 100 })) }) }, handler: options.controller.declare });
   app.post("/declarations/:id/payments", { preHandler: payer, schema: { tags: ["税务申报"], security: [{ bearerAuth: [] }], params: id, body: paymentBody }, handler: options.controller.pay });
+  app.post("/accrue-surcharges", {
+    preHandler: editor,
+    schema: {
+      tags: ["税务申报"],
+      summary: "计提附加税费凭证",
+      security: [{ bearerAuth: [] }],
+      body: Type.Object({ periodId: Type.Integer({ minimum: 1 }) }),
+    },
+    handler: options.controller.accrueSurcharges,
+  });
 }

@@ -2,7 +2,12 @@ import { Type } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { unauthorized } from "../../common/errors/app-error.js";
 import type { AccountBalanceController } from "./account-balance.controller.js";
-import { AccountBalanceQuerySchema, AccountBalanceSchema } from "./dto/account-balance.dto.js";
+import {
+  AccountBalanceQuerySchema,
+  AccountBalanceSchema,
+  AuxiliaryBalanceQuerySchema,
+  AuxiliaryBalanceResponseSchema,
+} from "./dto/account-balance.dto.js";
 
 async function authenticate(request: FastifyRequest): Promise<void> {
   await request.jwtVerify();
@@ -22,5 +27,15 @@ export async function accountBalanceRoutes(
       response: { 200: Type.Object({ success: Type.Literal(true), data: AccountBalanceSchema, message: Type.String(), requestId: Type.String() }) },
     },
     handler: options.controller.getBalances,
+  });
+
+  app.get("/auxiliary", {
+    preHandler: authenticate,
+    schema: {
+      tags: ["账簿"], summary: "查询科目+辅助核算余额表",
+      security: [{ bearerAuth: [] }], querystring: AuxiliaryBalanceQuerySchema,
+      response: { 200: Type.Object({ success: Type.Literal(true), data: AuxiliaryBalanceResponseSchema, message: Type.String(), requestId: Type.String() }) },
+    },
+    handler: options.controller.getAuxiliaryBalances,
   });
 }

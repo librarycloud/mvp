@@ -47,11 +47,18 @@ import { PrismaInvoiceRepository } from "./modules/invoice/invoice.repository.js
 import { invoiceRoutes } from "./modules/invoice/invoice.routes.js";
 import { InvoiceService } from "./modules/invoice/invoice.service.js";
 import { XmlInvoiceParser } from "./modules/invoice/xml-invoice-parser.js";
+import { VoucherTemplateController } from "./modules/voucher-template/voucher-template.controller.js";
+import { VoucherTemplateService } from "./modules/voucher-template/voucher-template.service.js";
+import { voucherTemplateRoutes } from "./modules/voucher-template/voucher-template.routes.js";
+import { DeferredExpenseController } from "./modules/deferred-expense/deferred-expense.controller.js";
+import { DeferredExpenseService } from "./modules/deferred-expense/deferred-expense.service.js";
+import { deferredExpenseRoutes } from "./modules/deferred-expense/deferred-expense.routes.js";
 import { PrismaVoucherRepository } from "./modules/voucher/prisma-voucher.repository.js";
 import type { VoucherRepository } from "./modules/voucher/voucher.repository.js";
 import { VoucherController } from "./modules/voucher/voucher.controller.js";
 import { voucherRoutes } from "./modules/voucher/voucher.routes.js";
 import { VoucherService } from "./modules/voucher/voucher.service.js";
+import { VoucherImportService } from "./modules/voucher/voucher-import.service.js";
 import { GeneralLedgerController } from "./modules/general-ledger/general-ledger.controller.js";
 import type { GeneralLedgerRepository } from "./modules/general-ledger/general-ledger.repository.js";
 import { PrismaGeneralLedgerRepository } from "./modules/general-ledger/general-ledger.repository.js";
@@ -127,6 +134,7 @@ import { UserService } from "./modules/user/user.service.js";
 import { AuditController } from "./modules/audit/audit.controller.js";
 import { auditRoutes } from "./modules/audit/audit.routes.js";
 import { AuditService } from "./modules/audit/audit.service.js";
+import { AuditArchiveService } from "./modules/audit/audit-archive.service.js";
 import { DimensionController } from "./modules/dimension/dimension.controller.js";
 import { DimensionService } from "./modules/dimension/dimension.service.js";
 import { dimensionRoutes } from "./modules/dimension/dimension.routes.js";
@@ -245,6 +253,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       !options.bankTransactionRepository || options.accountingPeriodRepository ? accountingPeriodRepository : undefined,
       undefined,
       config.cmbApiAllowedHosts,
+      modulePrisma,
     ),
     new CmbFetchConfigService(modulePrisma, config.jwtSecret),
   );
@@ -269,14 +278,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const aiSuggestionController = new AiSuggestionController(
     new AiSuggestionService(aiSuggestionRepository, suggestionProvider),
   );
+  const voucherPeriodService = !options.voucherRepository || options.accountingPeriodRepository
+    ? new AccountingPeriodService(accountingPeriodRepository)
+    : undefined;
   const voucherController = new VoucherController(
     new VoucherService(
       voucherRepository,
       options.fileStorage ?? new LocalFileStorage(config.uploadDir),
-      !options.voucherRepository || options.accountingPeriodRepository
-        ? new AccountingPeriodService(accountingPeriodRepository)
-        : undefined,
+      voucherPeriodService,
     ),
+    new VoucherImportService(modulePrisma, voucherPeriodService),
   );
   const userController = new UserController(new UserService(modulePrisma, new BcryptPasswordHasher()));
   const accountingPeriodController = new AccountingPeriodController(
@@ -292,6 +303,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const attachmentRelationController = new AttachmentRelationController(new AttachmentRelationService(attachmentRepository!, options.fileStorage ?? new LocalFileStorage(config.uploadDir)));
   const accountingPeriodService = new AccountingPeriodService(accountingPeriodRepository);
   const fixedAssetController = new FixedAssetController(new FixedAssetService(modulePrisma, accountingPeriodService));
+  const deferredExpenseController = new DeferredExpenseController(new DeferredExpenseService(modulePrisma, accountingPeriodService));
   const arApController = new ArApController(new ArApService(modulePrisma, accountingPeriodService));
   const salaryController = new SalaryController(new SalaryService(modulePrisma, accountingPeriodService));
   const yearEndClosingController = new YearEndClosingController(new YearEndClosingService(modulePrisma));
@@ -312,7 +324,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const reportController = new ReportController(reportService, new ReportExportService(reportService, config.pdfFontPath ?? null, modulePrisma));
   const reportTemplateController = new ReportTemplateController(new ReportTemplateService(modulePrisma));
   const taxController = new TaxController(new TaxService(modulePrisma, accountingPeriodService));
-  const auditController = new AuditController(new AuditService(modulePrisma));
+  const auditController = new AuditController(new AuditService(modulePrisma), new AuditArchiveService(modulePrisma));
   const dimensionController = new DimensionController(new DimensionService(modulePrisma));
   const budgetController = new BudgetController(budgetService);
 
@@ -334,13 +346,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
     prefix: "/api/v1/ai/voucher-suggestions",
     controller: aiSuggestionController,
   });
+  const voucherTemplateController = new VoucherTemplateController(new VoucherTemplateService(modulePrisma));
   await app.register(voucherRoutes, { prefix: "/api/v1/vouchers", controller: voucherController });
+  await app.register(voucherTemplateRoutes, { prefix: "/api/v1/voucher-templates", controller: voucherTemplateController });
   await app.register(reportTemplateRoutes, { prefix: "/api/v1/report-templates", controller: reportTemplateController });
   await app.register(taxRoutes, { prefix: "/api/v1/tax", controller: taxController });
   await app.register(accountingPeriodRoutes, { prefix: "/api/v1/accounting-periods", controller: accountingPeriodController });
   await app.register(dictionaryRoutes, { prefix: "/api/v1/dictionary", controller: dictionaryController });
   await app.register(attachmentRelationRoutes, { prefix: "/api/v1/attachments", controller: attachmentRelationController });
   await app.register(fixedAssetRoutes, { prefix: "/api/v1/fixed-assets", controller: fixedAssetController });
+  await app.register(deferredExpenseRoutes, { prefix: "/api/v1/deferred-expenses", controller: deferredExpenseController });
   await app.register(arApRoutes, { prefix: "/api/v1/ar-ap", controller: arApController });
   await app.register(salaryRoutes, { prefix: "/api/v1/salaries", controller: salaryController });
   await app.register(yearEndClosingRoutes, { prefix: "/api/v1/year-end-closings", controller: yearEndClosingController });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { AppError } from "../../common/errors/app-error.js";
-import { ACCOUNTING_PERIOD_STATUS } from "../../common/status-codes.js";
+import { ACCOUNTING_PERIOD_STATUS, VOUCHER_STATUS } from "../../common/status-codes.js";
 import type { FileStorage } from "../../infrastructure/storage/file-storage.js";
 import type { BankFileParser } from "./bank-file-parser.js";
 import type {
@@ -14,6 +14,8 @@ import type {
 } from "./bank-transaction.types.js";
 import type { AccountingPeriodRepository } from "../accounting-period/accounting-period.types.js";
 import { CmbDirectClient } from "./cmb-direct-client.js";
+import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
+import { Prisma, type PrismaClient } from "../../generated/prisma/client.js";
 
 export interface BankFetchConfig {
   apiUrl: string;
@@ -43,6 +45,7 @@ export class BankTransactionService {
     private readonly periodRepository?: Pick<AccountingPeriodRepository, "findByPostingDate">,
     private readonly cmbClient: Pick<CmbDirectClient, "request"> = new CmbDirectClient(),
     private readonly allowedBankHosts: readonly string[] = ["cdc.cmbchina.com"],
+    private readonly prisma?: PrismaClient,
   ) {}
 
   async fetchAndImport(config: BankFetchConfig, context: BankImportContext): Promise<BankImportSummary> {
@@ -224,5 +227,147 @@ export class BankTransactionService {
 
   private text(value: unknown): string {
     return value === null || value === undefined ? "" : String(value).trim();
+  }
+
+  async generateVoucher(
+    transactionId: number,
+    counterAccountId: number,
+    summary?: string,
+    actor?: { actorId: number; role: string },
+  ) {
+    const prisma = this.database();
+    return prisma.$transaction(async (tx) => {
+      const transaction = await tx.bankTransaction.findFirst({
+        where: { id: transactionId, deletedAt: null },
+      });
+      if (!transaction) throw new AppError("BANK_TRANSACTION_NOT_FOUND", "银行流水不存在", 404);
+      if (transaction.voucherId) throw new AppError("BANK_TRANSACTION_ALREADY_HAS_VOUCHER", "该银行流水已生成记账凭证", 409);
+
+      const postingDate = transaction.transactionDate ?? transaction.transactionTime;
+      const period = this.periodRepository
+        ? await this.periodRepository.findByPostingDate(postingDate)
+        : null;
+      if (period?.status === ACCOUNTING_PERIOD_STATUS.CLOSED) {
+        throw new AppError("ACCOUNTING_PERIOD_CLOSED", "流水发生日期所在会计期间已结账，无法生成凭证", 400);
+      }
+
+      const fiscalYear = period?.year ?? postingDate.getFullYear();
+      const fiscalPeriod = period?.month ?? postingDate.getMonth() + 1;
+
+      const counterAccount = await tx.account.findFirst({
+        where: { id: counterAccountId, deletedAt: null, isEnabled: true, isLeaf: true },
+      });
+      if (!counterAccount) throw new AppError("ACCOUNT_NOT_FOUND", "对方会计科目不存在、未启用或不是末级科目", 400);
+
+      const bankAccount = await tx.account.findFirst({
+        where: { code: { startsWith: "1002" }, deletedAt: null, isEnabled: true, isLeaf: true },
+        orderBy: { code: "asc" },
+      });
+      if (!bankAccount) throw new AppError("ACCOUNT_NOT_FOUND", "未找到适用的银行存款科目", 400);
+
+      const amount = new Prisma.Decimal(transaction.amount);
+      const absAmount = amount.abs();
+      if (absAmount.isZero()) throw new AppError("INVALID_AMOUNT", "银行流水金额不能为零", 400);
+
+      const isInflow = amount.greaterThan(0);
+      const finalSummary = summary?.trim() || transaction.summary?.trim() || `${isInflow ? "银行收款" : "银行付款"}-${transaction.transactionNo}`;
+
+      const entries = isInflow
+        ? [
+            {
+              lineNo: 1,
+              accountId: bankAccount.id,
+              summary: finalSummary,
+              debitAmount: absAmount,
+              creditAmount: new Prisma.Decimal(0),
+            },
+            {
+              lineNo: 2,
+              accountId: counterAccount.id,
+              summary: finalSummary,
+              debitAmount: new Prisma.Decimal(0),
+              creditAmount: absAmount,
+            },
+          ]
+        : [
+            {
+              lineNo: 1,
+              accountId: counterAccount.id,
+              summary: finalSummary,
+              debitAmount: absAmount,
+              creditAmount: new Prisma.Decimal(0),
+            },
+            {
+              lineNo: 2,
+              accountId: bankAccount.id,
+              summary: finalSummary,
+              debitAmount: new Prisma.Decimal(0),
+              creditAmount: absAmount,
+            },
+          ];
+
+      let resolvedPeriodId = period?.id;
+      if (!resolvedPeriodId) {
+        const p = await tx.accountingPeriod?.findFirst?.({
+          where: { year: fiscalYear, month: fiscalPeriod, deletedAt: null },
+        });
+        resolvedPeriodId = p?.id ?? 1;
+      }
+
+      const sequence = await getNextVoucherNumber(tx, fiscalYear);
+
+      const voucher = await tx.voucher.create({
+        data: {
+          ...sequence,
+          fiscalYear,
+          fiscalPeriod,
+          voucherDate: postingDate,
+          postingDate,
+          periodId: resolvedPeriodId,
+          summary: finalSummary,
+          sourceType: "BANK_TRANSACTION",
+          category: isInflow ? "RECEIPT" : "PAYMENT",
+          status: VOUCHER_STATUS.POSTED,
+          totalDebit: absAmount,
+          totalCredit: absAmount,
+          createdById: actor?.actorId ?? 1,
+          reviewerId: actor?.actorId ?? 1,
+          reviewedAt: new Date(),
+          postedById: actor?.actorId ?? 1,
+          postedAt: new Date(),
+          entries: { create: entries },
+        },
+      });
+
+      await tx.bankTransaction.update({
+        where: { id: transactionId },
+        data: { voucherId: voucher.id },
+      });
+
+      await tx.voucherSource.create({
+        data: {
+          voucherId: voucher.id,
+          bankTransactionId: transactionId,
+        },
+      });
+
+      await tx.accountingEvent.create({
+        data: {
+          eventType: "BANK_TRANSACTION_VOUCHER_GENERATED",
+          sourceType: "BankTransaction",
+          sourceId: transactionId,
+          voucherId: voucher.id,
+          description: `银行流水【${transaction.transactionNo}】自动生成记账凭证【${voucher.voucherNo}】`,
+          createdById: actor?.actorId ?? 1,
+        },
+      });
+
+      return voucher;
+    });
+  }
+
+  private database() {
+    if (!this.prisma) throw new AppError("SERVICE_UNAVAILABLE", "未配置数据库客户端", 503);
+    return this.prisma;
   }
 }

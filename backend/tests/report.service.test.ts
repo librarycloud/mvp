@@ -322,4 +322,24 @@ describe("ReportService", () => {
       new ReportService(repository).generateBalanceSheet({ periodType: "MONTH", fiscalYear: 2026, period: 7 }, 1),
     ).rejects.toMatchObject({ code: "REPORT_BALANCE_SHEET_UNBALANCED" });
   });
+
+  it("drills down into report item to return contributing accounts and their period figures", async () => {
+    const repository = new FakeReportRepository();
+    const service = new ReportService(repository);
+    await service.generateIncomeStatement({ periodType: "MONTH", fiscalYear: 2026, period: 7 }, 1);
+
+    const drill = await service.drillDown(201, 11);
+    expect(drill).toMatchObject({
+      reportId: 201,
+      item: { id: 11, itemCode: "REVENUE", name: "收入" },
+    });
+    expect(drill.accounts.length).toBe(1);
+    expect(drill.accounts[0]).toMatchObject({
+      id: 101,
+      code: "101",
+      name: "科目101",
+      operator: "ADD",
+      valueType: "PERIOD_CREDIT",
+    });
+  });
 });

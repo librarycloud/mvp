@@ -51,6 +51,15 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
     },
     handler: options.controller.generateCashFlowStatement,
   });
+  app.post("/cash-flow-indirect", {
+    preHandler: authenticate,
+    schema: {
+      tags: ["报表"], summary: "生成现金流量表补充资料（间接法）",
+      description: "遵循 CAS 31 准则将净利润调节为经营活动现金流量净额。",
+      security: [{ bearerAuth: [] }], body: IncomeStatementPeriodSchema,
+    },
+    handler: options.controller.generateCashFlowIndirect,
+  });
   app.post("/equity-change-statement/generate", {
     preHandler: authenticate,
     schema: {
@@ -71,4 +80,14 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
   });
   app.get("/:id/export.xlsx", { preHandler: authenticate, schema: { tags: ["报表"], security: [{ bearerAuth: [] }], params: ReportParamsSchema }, handler: options.controller.exportExcel });
   app.get("/:id/export.pdf", { preHandler: authenticate, schema: { tags: ["报表"], security: [{ bearerAuth: [] }], params: ReportParamsSchema }, handler: options.controller.exportPdf });
+  app.get("/:id/items/:itemId/drill-down", {
+    preHandler: authenticate,
+    schema: {
+      tags: ["报表"],
+      summary: "报表项目穿透下钻",
+      security: [{ bearerAuth: [] }],
+      params: Type.Object({ id: Type.Integer({ minimum: 1 }), itemId: Type.Integer({ minimum: 1 }) }),
+    },
+    handler: options.controller.drillDown,
+  });
 }

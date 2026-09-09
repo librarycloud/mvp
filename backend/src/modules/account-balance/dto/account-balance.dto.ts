@@ -28,3 +28,44 @@ export const AccountBalanceSchema = Type.Object({
 });
 
 export type AccountBalanceQuery = Static<typeof AccountBalanceQuerySchema>;
+
+export const AuxiliaryBalanceQuerySchema = Type.Object(
+  {
+    startDate: Type.String({ format: "date" }),
+    endDate: Type.String({ format: "date" }),
+    accountId: Type.Optional(Type.Integer({ minimum: 1 })),
+    dimensionId: Type.Optional(Type.Integer({ minimum: 1 })),
+    includeZero: Type.Optional(Type.Boolean({ default: true })),
+  },
+  { additionalProperties: false },
+);
+
+export const AuxiliaryBalanceRowSchema = Type.Object({
+  accountId: Type.Integer({ minimum: 1 }),
+  accountCode: Type.String(),
+  accountName: Type.String(),
+  dimensionId: Type.Integer({ minimum: 1 }),
+  dimensionCode: Type.String(),
+  dimensionName: Type.String(),
+  memberId: Type.Integer({ minimum: 1 }),
+  memberCode: Type.String(),
+  memberName: Type.String(),
+  openingDebit: Type.String(),
+  openingCredit: Type.String(),
+  openingDirection: Type.Union([Type.Literal("DEBIT"), Type.Literal("CREDIT"), Type.Literal("FLAT")]),
+  openingBalance: Type.String(),
+  periodDebit: Type.String(),
+  periodCredit: Type.String(),
+  closingDebit: Type.String(),
+  closingCredit: Type.String(),
+  closingDirection: Type.Union([Type.Literal("DEBIT"), Type.Literal("CREDIT"), Type.Literal("FLAT")]),
+  closingBalance: Type.String(),
+});
+
+export const AuxiliaryBalanceResponseSchema = Type.Object({
+  startDate: Type.String({ format: "date-time" }),
+  endDate: Type.String({ format: "date-time" }),
+  rows: Type.Array(AuxiliaryBalanceRowSchema),
+});
+
+export type AuxiliaryBalanceQueryDto = Static<typeof AuxiliaryBalanceQuerySchema>;

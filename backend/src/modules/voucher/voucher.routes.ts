@@ -62,6 +62,22 @@ export async function voucherRoutes(app: FastifyInstance, options: { controller:
     schema: { tags: ["凭证"], summary: "管理员批量记账凭证", security: [{ bearerAuth: [] }], body: VoucherBatchBodySchema, response: { 200: success(VoucherBatchResultSchema) } },
     handler: options.controller.batchPost,
   });
+  app.post("/reorder", {
+    preHandler: authenticate,
+    schema: {
+      tags: ["凭证"],
+      summary: "凭证断号重排与整理",
+      security: [{ bearerAuth: [] }],
+      body: Type.Object({
+        fiscalYear: Type.Integer({ minimum: 2000, maximum: 9999 }),
+        fiscalPeriod: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+      }),
+      response: {
+        200: success(Type.Object({ totalReordered: Type.Integer(), gapsFixed: Type.Integer() })),
+      },
+    },
+    handler: options.controller.reorder,
+  });
   app.get("/:id", {
     preHandler: authenticate,
     schema: { tags: ["凭证"], summary: "查询凭证详情", security: [{ bearerAuth: [] }], params: VoucherParamsSchema, response: { 200: success(VoucherDetailSchema) } },
@@ -100,5 +116,45 @@ export async function voucherRoutes(app: FastifyInstance, options: { controller:
       response: { 201: success(VoucherAttachmentSchema) },
     },
     handler: options.controller.addAttachment,
+  });
+  app.post("/:id/cashier-sign", {
+    preHandler: authenticate,
+    schema: {
+      tags: ["凭证"],
+      summary: "出纳凭证签字",
+      security: [{ bearerAuth: [] }],
+      params: VoucherParamsSchema,
+    },
+    handler: options.controller.cashierSign,
+  });
+  app.get("/cashier-journal", {
+    preHandler: authenticate,
+    schema: {
+      tags: ["账簿"],
+      summary: "出纳日记账查询",
+      security: [{ bearerAuth: [] }],
+      querystring: Type.Object({
+        accountCode: Type.Optional(Type.String({ maxLength: 32 })),
+        startDate: Type.String({ format: "date" }),
+        endDate: Type.String({ format: "date" }),
+      }),
+    },
+    handler: options.controller.cashierJournal,
+  });
+  app.get("/import-template", {
+    preHandler: authenticate,
+    schema: { tags: ["凭证"], summary: "下载凭证批量导入 Excel 模板", security: [{ bearerAuth: [] }] },
+    handler: options.controller.downloadImportTemplate,
+  });
+  app.post("/import", {
+    preHandler: authenticate,
+    schema: {
+      tags: ["凭证"],
+      summary: "批量导入记账凭证",
+      description: "支持上传 Excel (.xlsx) 或 CSV 凭证导入文件，预分配凭证号原子保存",
+      consumes: ["multipart/form-data"],
+      security: [{ bearerAuth: [] }],
+    },
+    handler: options.controller.importVouchers,
   });
 }

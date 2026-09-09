@@ -119,4 +119,51 @@ describe("InvoiceService", () => {
 
     await expect(service.issueSalesRequest(1, 9, 1)).rejects.toMatchObject({ code: "SALES_INVOICE_BUYER_MISMATCH" });
   });
+
+  it("automatically generates a purchase voucher with expense and input tax entries", async () => {
+    const createdVoucher = { id: 100, voucherNo: "2026-000001" };
+    const tx = {
+      $executeRaw: async () => 1,
+      $queryRaw: async () => [{ next_value: 1 }],
+      voucherSequence: { update: async () => {} },
+      invoice: {
+        findFirst: async () => ({
+          id: 1,
+          direction: "PURCHASE",
+          invoiceNumber: "INV-001",
+          sellerName: "办公用品公司",
+          totalAmountWithoutTax: new Prisma.Decimal("1000"),
+          totalTaxAmount: new Prisma.Decimal("130"),
+          totalTaxIncludedAmount: new Prisma.Decimal("1130"),
+          issueDate: new Date("2026-07-15"),
+          voucherId: null,
+        }),
+        update: async () => {},
+      },
+      account: {
+        findFirst: async ({ where }: any) => {
+          const prefix = typeof where.code === "object" ? where.code?.startsWith : where.code;
+          if (prefix?.startsWith?.("6602") || prefix === "6602") return { id: 601, code: "6602", name: "管理费用" };
+          if (prefix?.startsWith?.("22210101") || prefix === "22210101" || prefix === "2221") return { id: 221, code: "22210101", name: "进项税额" };
+          if (prefix?.startsWith?.("2202") || prefix === "2202") return { id: 202, code: "2202", name: "应付账款" };
+          return null;
+        },
+      },
+      voucher: {
+        create: async ({ data }: any) => {
+          expect(data.totalDebit.toString()).toBe("1130");
+          expect(data.entries.create).toHaveLength(3);
+          return createdVoucher;
+        },
+      },
+      voucherSource: { create: async () => {} },
+      accountingEvent: { create: async () => {} },
+    };
+    const prisma = { $transaction: async (work: any) => work(tx) } as any;
+    const service = new InvoiceService(new FakeInvoiceRepository(), new XmlInvoiceParser(), new MemoryFileStorage(), undefined, prisma);
+
+    const voucher = await service.generateVoucher(1, {}, { actorId: 1, role: "ACCOUNTANT" });
+    expect(voucher).toEqual(createdVoucher);
+  });
 });
+

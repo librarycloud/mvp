@@ -162,6 +162,28 @@ export class VoucherService {
     return voucher;
   }
 
+  async reorder(fiscalYear: number, fiscalPeriod?: number, actor?: VoucherActor) {
+    if (actor) this.assertAdmin(actor);
+    if (!Number.isInteger(fiscalYear) || fiscalYear < 2000 || fiscalYear > 9999) {
+      throw new AppError("INVALID_FISCAL_YEAR", "会计年度无效", 400);
+    }
+    return this.repository.reorder(fiscalYear, fiscalPeriod, actor);
+  }
+
+  async cashierSign(voucherId: number, actor: VoucherActor) {
+    if (!["ADMIN", "FINANCE_MANAGER", "CASHIER"].includes(actor.role)) {
+      throw new AppError("FORBIDDEN", "仅出纳、财务主管或管理员可以执行出纳签字", 403);
+    }
+    return this.repository.cashierSign(voucherId, actor);
+  }
+
+  async cashierJournal(query: { accountCode?: string; startDate: Date; endDate: Date }) {
+    if (query.startDate > query.endDate) {
+      throw new AppError("INVALID_DATE_RANGE", "开始日期不能晚于结束日期", 400);
+    }
+    return this.repository.cashierJournal(query);
+  }
+
   async addAttachment(
     id: number,
     file: { originalName: string; mimeType: string; data: Buffer },

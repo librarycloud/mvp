@@ -19,4 +19,5 @@ export class TaxController {
   declare = async (request: FastifyRequest<{ Params: DeclarationParams; Body?: { declarationNo?: string } }>, reply: FastifyReply) => sendSuccess(reply, await this.service.declare(request.params.id, request.body?.declarationNo, Number(request.user.sub)), "税务申报已登记");
   inspectRisks = async (request: FastifyRequest<{ Params: DeclarationParams }>, reply: FastifyReply) => sendSuccess(reply, await this.service.inspectRisks(request.params.id), "税务风险自检完成");
   pay = async (request: FastifyRequest<{ Params: DeclarationParams; Body: { amount: string; paymentDate: string; paymentReference?: string; bankTransactionId?: number } }>, reply: FastifyReply) => sendSuccess(reply, await this.service.pay(request.params.id, request.body, Number(request.user.sub)), "税款缴纳已登记");
+  accrueSurcharges = async (request: FastifyRequest<{ Body: { periodId: number } }>, reply: FastifyReply) => sendSuccess(reply, await this.service.accrueSurcharges(request.body.periodId, { actorId: Number(request.user.sub), role: request.user.role }), "附加税费计提凭证生成成功", 201);
 }

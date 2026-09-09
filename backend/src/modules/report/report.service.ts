@@ -69,6 +69,122 @@ export class ReportService {
     return this.generate(CASH_FLOW_STATEMENT_TEMPLATE_CODE, period, generatedById, "CASH_FLOW_STATEMENT");
   }
 
+  async generateCashFlowIndirect(period: ReportPeriodInput) {
+    const dates = await this.periodDates(period);
+    const accounts = await this.repository.listAccounts();
+    const earliest = new Date(1900, 0, 1);
+    const openingEnd = new Date(dates.start.getTime() - 1);
+
+    const [openingTotals, currentTotals, closingTotals] = await Promise.all([
+      this.repository.aggregateEntries(earliest, openingEnd),
+      this.repository.aggregateEntries(dates.start, dates.end),
+      this.repository.aggregateEntries(earliest, dates.end),
+    ]);
+
+    const opMap = new Map(openingTotals.map((t) => [t.accountId, t]));
+    const curMap = new Map(currentTotals.map((t) => [t.accountId, t]));
+    const clMap = new Map(closingTotals.map((t) => [t.accountId, t]));
+
+    const getBalances = (codePrefixes: string[]) => {
+      let openingBalance = new Prisma.Decimal(0);
+      let closingBalance = new Prisma.Decimal(0);
+      let debitMovement = new Prisma.Decimal(0);
+      let creditMovement = new Prisma.Decimal(0);
+
+      for (const a of accounts) {
+        if (!a.code || !codePrefixes.some((p) => a.code!.startsWith(p))) continue;
+        const op = opMap.get(a.id);
+        const cur = curMap.get(a.id);
+        const cl = clMap.get(a.id);
+
+        const opD = new Prisma.Decimal(op?.debit ?? "0");
+        const opC = new Prisma.Decimal(op?.credit ?? "0");
+        const clD = new Prisma.Decimal(cl?.debit ?? "0");
+        const clC = new Prisma.Decimal(cl?.credit ?? "0");
+        const curD = new Prisma.Decimal(cur?.debit ?? "0");
+        const curC = new Prisma.Decimal(cur?.credit ?? "0");
+
+        debitMovement = debitMovement.plus(curD);
+        creditMovement = creditMovement.plus(curC);
+
+        if (a.normalDirection === "DEBIT") {
+          openingBalance = openingBalance.plus(opD.minus(opC));
+          closingBalance = closingBalance.plus(clD.minus(clC));
+        } else {
+          openingBalance = openingBalance.plus(opC.minus(opD));
+          closingBalance = closingBalance.plus(clC.minus(clD));
+        }
+      }
+      return { openingBalance, closingBalance, debitMovement, creditMovement };
+    };
+
+    let netProfit = new Prisma.Decimal(0);
+    for (const a of accounts) {
+      if (a.category !== "PROFIT_AND_LOSS") continue;
+      const cur = curMap.get(a.id);
+      if (!cur) continue;
+      const curD = new Prisma.Decimal(cur.debit ?? "0");
+      const curC = new Prisma.Decimal(cur.credit ?? "0");
+      if (a.normalDirection === "CREDIT") {
+        netProfit = netProfit.plus(curC.minus(curD));
+      } else {
+        netProfit = netProfit.minus(curD.minus(curC));
+      }
+    }
+
+    const impairment = getBalances(["6701", "6702", "1231"]);
+    const impairmentAmount = impairment.debitMovement.minus(impairment.creditMovement);
+    const depr = getBalances(["1602"]);
+    const deprAmount = depr.creditMovement.minus(depr.debitMovement);
+    const amort = getBalances(["1702", "1801"]);
+    const amortAmount = amort.creditMovement.minus(amort.debitMovement);
+    const disposal = getBalances(["6115"]);
+    const disposalAmount = disposal.debitMovement.minus(disposal.creditMovement);
+    const finExpense = getBalances(["6603"]);
+    const finAmount = finExpense.debitMovement.minus(finExpense.creditMovement);
+    const invest = getBalances(["6111"]);
+    const investLossAmount = invest.debitMovement.minus(invest.creditMovement);
+    const inv = getBalances(["14"]);
+    const invDecrease = inv.openingBalance.minus(inv.closingBalance);
+    const rec = getBalances(["1122", "1123", "1221"]);
+    const recDecrease = rec.openingBalance.minus(rec.closingBalance);
+    const pay = getBalances(["2202", "2203", "2211", "2221", "2241"]);
+    const payIncrease = pay.closingBalance.minus(pay.openingBalance);
+
+    const netOperatingCashFlow = netProfit
+      .plus(impairmentAmount)
+      .plus(deprAmount)
+      .plus(amortAmount)
+      .plus(disposalAmount)
+      .plus(finAmount)
+      .plus(investLossAmount)
+      .plus(invDecrease)
+      .plus(recDecrease)
+      .plus(payIncrease);
+
+    const items = [
+      { lineNo: 1, itemCode: "NET_PROFIT", name: "净利润", amount: netProfit.toFixed(2), note: "基于当期损益类科目发生额" },
+      { lineNo: 2, itemCode: "ASSET_IMPAIRMENT", name: "加：资产减值准备与信用减值损失", amount: impairmentAmount.toFixed(2), note: "科目 6701/6702/1231 发生额" },
+      { lineNo: 3, itemCode: "FIXED_ASSET_DEPR", name: "固定资产折旧", amount: deprAmount.toFixed(2), note: "科目 1602 累计折旧贷方净额" },
+      { lineNo: 4, itemCode: "AMORTIZATION", name: "无形资产与长期待摊费用摊销", amount: amortAmount.toFixed(2), note: "科目 1702/1801 摊销净额" },
+      { lineNo: 5, itemCode: "DISPOSAL_LOSS", name: "处置固定资产、无形资产和其他长期资产的损失（减：收益）", amount: disposalAmount.toFixed(2), note: "科目 6115 净额" },
+      { lineNo: 6, itemCode: "FINANCIAL_EXPENSE", name: "财务费用（利息支出）", amount: finAmount.toFixed(2), note: "科目 6603 发生额" },
+      { lineNo: 7, itemCode: "INVESTMENT_LOSS", name: "投资损失（减：收益）", amount: investLossAmount.toFixed(2), note: "科目 6111 净额" },
+      { lineNo: 8, itemCode: "INVENTORY_DECREASE", name: "存货的减少（减：增加）", amount: invDecrease.toFixed(2), note: "存货类 14xx 科目期初减期末" },
+      { lineNo: 9, itemCode: "OPERATING_REC_DECREASE", name: "经营性应收项目的减少（减：增加）", amount: recDecrease.toFixed(2), note: "往来应收类科目期初减期末" },
+      { lineNo: 10, itemCode: "OPERATING_PAY_INCREASE", name: "经营性应付项目的增加（减：减少）", amount: payIncrease.toFixed(2), note: "经营应付类科目期末减期初" },
+      { lineNo: 11, itemCode: "NET_OPERATING_CASH_FLOW", name: "经营活动产生的现金流量净额", amount: netOperatingCashFlow.toFixed(2), note: "净利润与各项调节项目代数和" },
+    ];
+
+    return {
+      period,
+      periodStart: dates.start.toISOString().slice(0, 10),
+      periodEnd: dates.end.toISOString().slice(0, 10),
+      items,
+      netOperatingCashFlow: netOperatingCashFlow.toFixed(2),
+    };
+  }
+
   async generateEquityChangeStatement(period: ReportPeriodInput, generatedById: number) {
     return this.generate(EQUITY_CHANGE_STATEMENT_TEMPLATE_CODE, period, generatedById, "EQUITY_CHANGE_STATEMENT");
   }
@@ -84,6 +200,69 @@ export class ReportService {
     const normalizedPageSize = Math.min(Math.max(pageSize, 1), 200);
     const result = await this.repository.listReports?.(normalizedPage, normalizedPageSize) ?? { items: [], total: 0 };
     return { ...result, page: normalizedPage, pageSize: normalizedPageSize, totalPages: Math.ceil(result.total / normalizedPageSize) };
+  }
+
+  async drillDown(reportId: number, reportItemId: number) {
+    const report = await this.getReport(reportId);
+    const line = (report as any).lines?.find(
+      (l: any) => l.reportItemId === reportItemId || l.reportItem?.id === reportItemId,
+    );
+    if (!line) throw new AppError("REPORT_ITEM_NOT_FOUND", "未找到对应的报表项目", 404);
+
+    const mappings = line.reportItem?.accountMappings ?? [];
+    const periodStart = new Date((report as any).periodStart);
+    const periodEnd = new Date((report as any).periodEnd);
+    const openingEnd = new Date(periodStart.getTime() - 1);
+    const earliest = new Date(1900, 0, 1);
+
+    const [openingTotals, periodTotals] = await Promise.all([
+      this.repository.aggregateEntries(earliest, openingEnd),
+      this.repository.aggregateEntries(periodStart, periodEnd),
+    ]);
+
+    const openingMap = new Map(openingTotals.map((t) => [t.accountId, t]));
+    const periodMap = new Map(periodTotals.map((t) => [t.accountId, t]));
+
+    const accounts = mappings.map((m: any) => {
+      const acc = m.account ?? { id: m.accountId, code: `Account-${m.accountId}`, name: `科目-${m.accountId}` };
+      const op = openingMap.get(m.accountId);
+      const pr = periodMap.get(m.accountId);
+      const opDebit = new Prisma.Decimal(op?.debit ?? 0);
+      const opCredit = new Prisma.Decimal(op?.credit ?? 0);
+      const prDebit = new Prisma.Decimal(pr?.debit ?? 0);
+      const prCredit = new Prisma.Decimal(pr?.credit ?? 0);
+      return {
+        id: acc.id,
+        code: acc.code,
+        name: acc.name,
+        operator: m.operator,
+        valueType: m.valueType,
+        openingDebit: opDebit.toString(),
+        openingCredit: opCredit.toString(),
+        periodDebit: prDebit.toString(),
+        periodCredit: prCredit.toString(),
+        closingDebit: opDebit.plus(prDebit).toString(),
+        closingCredit: opCredit.plus(prCredit).toString(),
+      };
+    });
+
+    return {
+      reportId: (report as any).id,
+      reportName: (report as any).template?.name ?? "财务报表",
+      periodStart: (report as any).periodStart,
+      periodEnd: (report as any).periodEnd,
+      item: {
+        id: line.reportItem?.id ?? reportItemId,
+        itemCode: line.reportItem?.itemCode ?? "",
+        name: line.reportItem?.name ?? "",
+        lineNumber: line.reportItem?.lineNumber ?? null,
+        openingAmount: line.openingAmount,
+        currentAmount: line.currentAmount,
+        closingAmount: line.closingAmount,
+        calculationTrace: line.calculationTrace,
+      },
+      accounts,
+    };
   }
 
   private calculate(

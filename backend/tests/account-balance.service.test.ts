@@ -38,4 +38,54 @@ describe("AccountBalanceService", () => {
       }),
     ).rejects.toMatchObject({ code: "INVALID_DATE_RANGE" });
   });
+
+  it("calculates auxiliary balance sheet by account and dimension member", async () => {
+    const repository = new FakeAccountBalanceRepository();
+    repository.auxiliaryEntries = [
+      {
+        date: new Date(2026, 5, 15),
+        dimensionId: 1,
+        dimensionMemberId: 10,
+        dimension: { id: 1, code: "CUST", name: "客户" },
+        dimensionMember: { id: 10, code: "C001", name: "阿里巴巴" },
+        voucherEntry: {
+          accountId: 200,
+          debitAmount: "0",
+          creditAmount: "2000",
+          account: { id: 200, code: "2202", name: "应付账款", normalDirection: "CREDIT" },
+        },
+      },
+      {
+        date: new Date(2026, 6, 10),
+        dimensionId: 1,
+        dimensionMemberId: 10,
+        dimension: { id: 1, code: "CUST", name: "客户" },
+        dimensionMember: { id: 10, code: "C001", name: "阿里巴巴" },
+        voucherEntry: {
+          accountId: 200,
+          debitAmount: "500",
+          creditAmount: "0",
+          account: { id: 200, code: "2202", name: "应付账款", normalDirection: "CREDIT" },
+        },
+      },
+    ];
+
+    const result = await new AccountBalanceService(repository).getAuxiliaryBalances({
+      startDate: new Date(2026, 6, 1),
+      endDate: new Date(2026, 6, 31),
+      includeZero: true,
+    });
+
+    expect(result.rows).toHaveLength(1);
+    const row = result.rows[0]!;
+    expect(row.accountCode).toBe("2202");
+    expect(row.memberName).toBe("阿里巴巴");
+    expect(row.openingDirection).toBe("CREDIT");
+    expect(row.openingBalance).toBe("2000");
+    expect(row.periodDebit).toBe("500");
+    expect(row.periodCredit).toBe("0");
+    expect(row.closingDirection).toBe("CREDIT");
+    expect(row.closingBalance).toBe("1500");
+  });
 });
+

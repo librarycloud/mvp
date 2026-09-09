@@ -22,6 +22,11 @@ export class ReportController {
     reply: FastifyReply,
   ) => sendSuccess(reply, await this.service.generateCashFlowStatement(request.body, Number(request.user.sub)), "现金流量表生成成功", 201);
 
+  generateCashFlowIndirect = async (
+    request: FastifyRequest<{ Body: IncomeStatementPeriod }>,
+    reply: FastifyReply,
+  ) => sendSuccess(reply, await this.service.generateCashFlowIndirect(request.body), "现金流量表补充资料（间接法）生成成功");
+
   generateEquityChangeStatement = async (
     request: FastifyRequest<{ Body: IncomeStatementPeriod }>,
     reply: FastifyReply,
@@ -43,4 +48,7 @@ export class ReportController {
 
   exportPdf = async (request: FastifyRequest<{ Params: ReportParams }>, reply: FastifyReply) =>
     reply.header("content-type", "application/pdf").header("content-disposition", `attachment; filename="report-${request.params.id}.pdf"`).send(await this.exporter.pdf(request.params.id, Number(request.user.sub)));
+
+  drillDown = async (request: FastifyRequest<{ Params: { id: number; itemId: number } }>, reply: FastifyReply) =>
+    sendSuccess(reply, await this.service.drillDown(Number(request.params.id), Number(request.params.itemId)));
 }

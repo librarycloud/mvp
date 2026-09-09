@@ -386,4 +386,209 @@ export class PrismaVoucherRepository implements VoucherRepository {
       ...(afterData ? { afterData: afterData as Prisma.InputJsonObject } : {}),
     };
   }
+
+  async reorder(fiscalYear: number, fiscalPeriod?: number, actor?: VoucherActor): Promise<{ totalReordered: number; gapsFixed: number }> {
+    return this.prisma.$transaction(async (tx) => {
+      const vouchers = await tx.voucher.findMany({
+        where: {
+          fiscalYear,
+          deletedAt: null,
+          status: { not: VOUCHER_STATUS.VOID },
+          ...(fiscalPeriod !== undefined ? { fiscalPeriod } : {}),
+        },
+        orderBy: [{ voucherDate: "asc" }, { sequenceNo: "asc" }, { id: "asc" }],
+        select: { id: true, sequenceNo: true, voucherNo: true },
+      });
+
+      let gapsFixed = 0;
+      for (let i = 0; i < vouchers.length; i++) {
+        if (vouchers[i]!.sequenceNo !== i + 1) {
+          gapsFixed++;
+        }
+      }
+
+      if (gapsFixed > 0) {
+        for (const v of vouchers) {
+          await tx.voucher.update({
+            where: { id: v.id },
+            data: { voucherNo: `TEMP-${v.id}-${v.voucherNo}` },
+          });
+        }
+        for (let i = 0; i < vouchers.length; i++) {
+          const newSeq = i + 1;
+          const newVoucherNo = `${fiscalYear}-${String(newSeq).padStart(6, "0")}`;
+          await tx.voucher.update({
+            where: { id: vouchers[i]!.id },
+            data: { sequenceNo: newSeq, voucherNo: newVoucherNo },
+          });
+        }
+        if (fiscalPeriod === undefined) {
+          await tx.voucherSequence.upsert({
+            where: { fiscalYear },
+            create: { fiscalYear, nextValue: vouchers.length + 1 },
+            update: { nextValue: vouchers.length + 1 },
+          });
+        }
+      }
+
+      if (actor) {
+        await tx.auditLog.create({
+          data: {
+            actorId: actor.actorId,
+            action: "UPDATE",
+            resourceType: "VoucherSequence",
+            resourceId: fiscalYear,
+            description: `凭证整理/重排编号：${fiscalYear}年${fiscalPeriod ? `${fiscalPeriod}期` : "全年"}`,
+            afterData: { totalReordered: vouchers.length, gapsFixed },
+          },
+        });
+      }
+
+      return { totalReordered: vouchers.length, gapsFixed };
+    });
+  }
+
+  async cashierSign(voucherId: number, actor: VoucherActor) {
+    return this.prisma.$transaction(async (tx) => {
+      const voucher = await tx.voucher.findFirst({
+        where: { id: voucherId, deletedAt: null },
+        include: {
+          entries: {
+            where: { deletedAt: null },
+            include: { account: true },
+          },
+        },
+      });
+      if (!voucher) throw new AppError("VOUCHER_NOT_FOUND", "凭证不存在", 404);
+      if (voucher.status === VOUCHER_STATUS.VOID) throw new AppError("VOUCHER_ALREADY_VOID", "已作废凭证不能进行出纳签字", 409);
+
+      const hasCashOrBank = voucher.entries.some((entry) =>
+        entry.account.code.startsWith("1001") || entry.account.code.startsWith("1002")
+      );
+      if (!hasCashOrBank) {
+        throw new AppError("NOT_CASH_OR_BANK_VOUCHER", "该凭证不包含现金或银行存款科目分录，无需出纳签字", 400);
+      }
+
+      const existingSign = await tx.accountingEvent.findFirst({
+        where: { voucherId, eventType: "CASHIER_SIGN", deletedAt: null },
+      });
+
+      const now = new Date();
+      if (!existingSign) {
+        await tx.accountingEvent.create({
+          data: {
+            eventType: "CASHIER_SIGN",
+            sourceType: "Voucher",
+            sourceId: voucherId,
+            voucherId,
+            description: "出纳签字确认",
+            createdById: actor.actorId,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            actorId: actor.actorId,
+            action: "UPDATE",
+            resourceType: "Voucher",
+            resourceId: voucherId,
+            description: `出纳对凭证【${voucher.voucherNo}】签字`,
+          },
+        });
+      }
+
+      return { voucherId, signed: true, signedAt: existingSign ? existingSign.createdAt : now, cashierId: actor.actorId };
+    });
+  }
+
+  async cashierJournal(query: { accountCode?: string; startDate: Date; endDate: Date }) {
+    const codePrefix = query.accountCode?.trim() || "1002";
+    const accounts = await this.prisma.account.findMany({
+      where: { code: { startsWith: codePrefix }, deletedAt: null, isEnabled: true },
+      select: { id: true, code: true, name: true },
+    });
+    const accountIds = accounts.map((a) => a.id);
+
+    const openingAgg = await this.prisma.voucherEntry.aggregate({
+      where: {
+        accountId: { in: accountIds },
+        deletedAt: null,
+        voucher: { status: VOUCHER_STATUS.POSTED, deletedAt: null, postingDate: { lt: query.startDate } },
+      },
+      _sum: { debitAmount: true, creditAmount: true },
+    });
+    const openingDebit = openingAgg._sum.debitAmount ?? new Prisma.Decimal(0);
+    const openingCredit = openingAgg._sum.creditAmount ?? new Prisma.Decimal(0);
+    const openingBalance = openingDebit.minus(openingCredit);
+
+    const periodEntries = await this.prisma.voucherEntry.findMany({
+      where: {
+        accountId: { in: accountIds },
+        deletedAt: null,
+        voucher: {
+          status: VOUCHER_STATUS.POSTED,
+          deletedAt: null,
+          postingDate: { gte: query.startDate, lte: query.endDate },
+        },
+      },
+      include: {
+        account: { select: { id: true, code: true, name: true } },
+        voucher: {
+          select: {
+            id: true,
+            voucherNo: true,
+            voucherDate: true,
+            postingDate: true,
+            summary: true,
+            accountingEvents: {
+              where: { eventType: "CASHIER_SIGN", deletedAt: null },
+              select: { createdById: true, createdAt: true, createdBy: { select: { displayName: true } } },
+            },
+          },
+        },
+      },
+      orderBy: [
+        { voucher: { postingDate: "asc" } },
+        { voucher: { sequenceNo: "asc" } },
+        { lineNo: "asc" },
+      ],
+    });
+
+    let runningBalance = openingBalance;
+    let totalDebit = new Prisma.Decimal(0);
+    let totalCredit = new Prisma.Decimal(0);
+
+    const rows = periodEntries.map((e) => {
+      totalDebit = totalDebit.plus(e.debitAmount);
+      totalCredit = totalCredit.plus(e.creditAmount);
+      runningBalance = runningBalance.plus(e.debitAmount).minus(e.creditAmount);
+      const signEvent = e.voucher.accountingEvents[0];
+      return {
+        id: e.id,
+        voucherId: e.voucher.id,
+        voucherNo: e.voucher.voucherNo,
+        voucherDate: e.voucher.voucherDate,
+        postingDate: e.voucher.postingDate,
+        accountCode: e.account.code,
+        accountName: e.account.name,
+        summary: e.summary || e.voucher.summary,
+        debitAmount: e.debitAmount.toString(),
+        creditAmount: e.creditAmount.toString(),
+        balance: runningBalance.toString(),
+        cashierSigned: !!signEvent,
+        cashierSignedAt: signEvent?.createdAt ?? null,
+        cashierName: signEvent?.createdBy?.displayName ?? null,
+      };
+    });
+
+    return {
+      accountCode: codePrefix,
+      startDate: query.startDate,
+      endDate: query.endDate,
+      openingBalance: openingBalance.toString(),
+      totalDebit: totalDebit.toString(),
+      totalCredit: totalCredit.toString(),
+      closingBalance: runningBalance.toString(),
+      entries: rows,
+    };
+  }
 }

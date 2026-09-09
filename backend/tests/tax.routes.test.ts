@@ -32,6 +32,7 @@ describe("tax declaration routes", () => {
       inspectRisks: noop,
       declare: noop,
       pay: noop,
+      accrueSurcharges: noop,
     } as unknown as TaxController;
 
     await app.register(taxRoutes, { prefix: "/api/v1/tax", controller });

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch, nextTick } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch, nextTick } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { UploadFilled } from "@element-plus/icons-vue";
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 import { api } from "../utils/api";
@@ -382,6 +383,67 @@ async function save() {
   await load();
 }
 
+async function saveAndNew() {
+  if (!isBalanced.value) {
+    ElMessage.error(`凭证借贷不平衡！当前借贷差额为：${balanceDiff.value} 元，请找平后再保存`);
+    return;
+  }
+  if (editingId.value) await api.put(`/vouchers/${editingId.value}`, form);
+  else await api.post("/vouchers", form);
+  ElMessage.success(editingId.value ? "凭证已修改，已开启下一张" : "凭证已保存，请录入下一张");
+  
+  editingId.value = "";
+  form.summary = "";
+  form.category = "TRANSFER";
+  categoryManuallySelected.value = false;
+  form.entries = [
+    { accountId: "" as number | "", summary: "", debitAmount: "0", creditAmount: "0", dimensionMemberIds: [] as number[] },
+    { accountId: "" as number | "", summary: "", debitAmount: "0", creditAmount: "0", dimensionMemberIds: [] as number[] },
+  ];
+  await load();
+  nextTick(() => {
+    const summaryInput = document.querySelector(".voucher-summary-input input") as HTMLInputElement | null;
+    summaryInput?.focus();
+  });
+}
+
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if (visible.value && e.altKey && (e.key === "s" || e.key === "S")) {
+    e.preventDefault();
+    if (isBalanced.value) {
+      saveAndNew();
+    } else {
+      ElMessage.warning(`凭证借贷不平（差额：${balanceDiff.value}元），无法保存并新增`);
+    }
+  }
+}
+
+const importVisible = ref(false);
+const importLoading = ref(false);
+
+function openImportModal() {
+  importVisible.value = true;
+}
+
+function downloadImportTemplate() {
+  return api.download("/vouchers/import-template", "记账凭证批量导入模板.xlsx");
+}
+
+async function handleCustomUpload(options: any) {
+  const file = options.file as File;
+  importLoading.value = true;
+  try {
+    const result = await api.upload<any>("/vouchers/import", file);
+    ElMessage.success(result?.message || `成功批量导入 ${result?.totalImported ?? 0} 张凭证！`);
+    importVisible.value = false;
+    await load(true);
+  } catch (error: any) {
+    ElMessage.error(error.message || "批量导入失败");
+  } finally {
+    importLoading.value = false;
+  }
+}
+
 async function transition(row: any, action: string, message: string, body?: unknown) {
   await api.post(`/vouchers/${row.id}/${action}`, body);
   ElMessage.success(message);
@@ -426,6 +488,118 @@ function sourceManaged(row: any) {
   return Number(row._count?.accountingEvents ?? 0) > 0;
 }
 
+// 凭证断号重排
+const reorderVisible = ref(false);
+const reorderYear = ref(new Date().getFullYear());
+const reorderPeriod = ref<number | "">("");
+const reorderLoading = ref(false);
+
+function openReorder() {
+  reorderYear.value = new Date().getFullYear();
+  reorderPeriod.value = "";
+  reorderVisible.value = true;
+}
+
+async function executeReorder() {
+  reorderLoading.value = true;
+  try {
+    const res = await api.post<{ totalReordered: number; gapsFixed: number }>("/vouchers/reorder", {
+      fiscalYear: Number(reorderYear.value),
+      ...(reorderPeriod.value !== "" ? { fiscalPeriod: Number(reorderPeriod.value) } : {}),
+    });
+    ElMessage.success(`重排完成：共整理 ${res.totalReordered} 张凭证，修复断号 ${res.gapsFixed} 处`);
+    reorderVisible.value = false;
+    await load();
+  } catch (err: any) {
+    ElMessage.error(err?.message || "重排凭证断号失败");
+  } finally {
+    reorderLoading.value = false;
+  }
+}
+
+// 常用凭证模板
+const templateModalVisible = ref(false);
+const templateList = ref<any[]>([]);
+const templateLoading = ref(false);
+const templateCategory = ref<string>("ALL");
+
+async function openTemplateModal() {
+  templateModalVisible.value = true;
+  templateLoading.value = true;
+  try {
+    templateList.value = await api.get<any[]>("/voucher-templates");
+  } catch (err: any) {
+    ElMessage.error(err?.message || "加载常用凭证模板失败");
+  } finally {
+    templateLoading.value = false;
+  }
+}
+
+const filteredTemplates = computed(() => {
+  if (templateCategory.value === "ALL") return templateList.value;
+  return templateList.value.filter((t) => t.category === templateCategory.value);
+});
+
+function applyTemplate(tpl: any) {
+  form.summary = tpl.summary || tpl.name;
+  if (tpl.entries && tpl.entries.length) {
+    form.entries = tpl.entries.map((e: any) => ({
+      accountId: e.accountId,
+      summary: e.summary || form.summary,
+      debitAmount: "0",
+      creditAmount: "0",
+      dimensionMemberIds: [],
+    }));
+  }
+  templateModalVisible.value = false;
+  ElMessage.success(`已调入模板【${tpl.name}】科目结构，请录入金额`);
+}
+
+async function saveAsTemplate() {
+  if (!form.summary.trim()) {
+    ElMessage.warning("请先填写全局摘要");
+    return;
+  }
+  const validEntries = form.entries.filter((e) => Boolean(e.accountId));
+  if (validEntries.length < 2) {
+    ElMessage.warning("模板至少需包含2行已选会计科目");
+    return;
+  }
+  const { value: templateName } = await ElMessageBox.prompt("请输入模板名称", "存为常用模板", {
+    inputValue: form.summary,
+    inputValidator: (v) => Boolean(v?.trim()) || "模板名称不能为空",
+  });
+  if (!templateName) return;
+
+  try {
+    await api.post("/voucher-templates", {
+      name: templateName.trim(),
+      category: form.category === "PAYMENT" ? "EXPENSE" : "COMMON",
+      summary: form.summary.trim(),
+      entries: validEntries.map((e, idx) => ({
+        lineNo: idx + 1,
+        accountId: Number(e.accountId),
+        direction: Number(e.debitAmount) > 0 || (Number(e.debitAmount) === 0 && Number(e.creditAmount) === 0 && idx === 0) ? "DEBIT" : "CREDIT",
+        summary: e.summary?.trim() || form.summary.trim(),
+      })),
+    });
+    ElMessage.success("已成功存为常用凭证模板");
+  } catch (err: any) {
+    ElMessage.error(err?.message || "保存模板失败");
+  }
+}
+
+// 出纳签字
+async function cashierSign(row: any) {
+  try {
+    await api.post(`/vouchers/${row.id}/cashier-sign`);
+    ElMessage.success(`出纳已完成对凭证【${row.voucherNo}】的签字确认`);
+    await load();
+  } catch (err: any) {
+    ElMessage.error(err?.message || "出纳签字失败");
+  }
+}
+
 function closeDetail() {
   detailVisible.value = false;
   if (route.query.voucherId) router.replace({ path: "/vouchers", query: {} });
@@ -441,6 +615,12 @@ onMounted(async () => {
   await Promise.all([load(), loadAccounts()]);
   const voucherId = Number(route.query.voucherId);
   if (Number.isInteger(voucherId) && voucherId > 0) await showDetail(voucherId);
+
+  window.addEventListener("keydown", handleGlobalKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", handleGlobalKeydown);
 });
 </script>
 
@@ -457,7 +637,9 @@ onMounted(async () => {
           <el-button v-if="isAdmin" @click="batch('review')">批量审核</el-button>
           <el-button v-if="isAdmin" type="success" @click="batch('post')">批量记账</el-button>
         </template>
+        <el-button v-if="isAdmin" @click="openReorder">整理凭证断号</el-button>
         <span v-if="currentPeriodLocked" class="period-closed">当前期间已关账</span>
+        <el-button @click="openImportModal">批量导入</el-button>
         <el-button type="primary" :disabled="currentPeriodLocked" @click="openCreate">新增凭证</el-button>
       </div>
     </section>
@@ -530,7 +712,7 @@ onMounted(async () => {
             <el-tag :type="colors[row.status as Status]">{{ labels[row.status as Status] }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" min-width="260">
+        <el-table-column label="操作" min-width="280">
           <template #default="{ row }">
             <el-button link @click="showDetail(row)">查看</el-button>
             <el-button link @click="openPrint(row)">打印</el-button>
@@ -542,6 +724,7 @@ onMounted(async () => {
               <el-button v-if="row.status === VOUCHER_STATUS.PENDING && !row.reviewedAt" link type="primary" :disabled="periodLocked(row)" @click="transition(row, 'review', '审核完成')">审核</el-button>
               <el-button v-if="row.status === VOUCHER_STATUS.PENDING" link :disabled="periodLocked(row)" @click="transition(row, 'unreview', '已取消审核')">取消审核</el-button>
               <el-button v-if="row.status === VOUCHER_STATUS.PENDING && row.reviewedAt" link type="success" :disabled="periodLocked(row)" @click="transition(row, 'post', '记账完成')">记账</el-button>
+              <el-button v-if="row.status === VOUCHER_STATUS.POSTED" link type="warning" @click="cashierSign(row)">出纳签字</el-button>
               <el-button v-if="row.status === VOUCHER_STATUS.POSTED && !sourceManaged(row)" link :disabled="periodLocked(row)" @click="transition(row, 'unpost', '已取消记账')">取消记账</el-button>
               <el-button v-if="row.status === VOUCHER_STATUS.POSTED && !sourceManaged(row)" link type="danger" :disabled="periodLocked(row)" @click="voidVoucher(row)">作废</el-button>
               <el-button v-if="row.status === VOUCHER_STATUS.VOID && !sourceManaged(row)" link type="primary" :disabled="periodLocked(row)" @click="transition(row, 'restore', '已恢复为草稿')">恢复</el-button>
@@ -555,7 +738,16 @@ onMounted(async () => {
     </el-card>
 
     <!-- 凭证录入与编辑对话框 -->
-    <el-dialog v-model="visible" :title="editingId ? '编辑凭证' : '新增手工凭证'" width="960px" destroy-on-close>
+    <el-dialog v-model="visible" width="960px" destroy-on-close>
+      <template #header>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding-right: 28px;">
+          <span style="font-weight: 600; font-size: 16px;">{{ editingId ? '编辑凭证' : '新增手工凭证' }}</span>
+          <div style="display: flex; gap: 8px;">
+            <el-button type="success" plain size="small" @click="openTemplateModal">调入常用模板</el-button>
+            <el-button plain size="small" @click="saveAsTemplate">存为模板</el-button>
+          </div>
+        </div>
+      </template>
       <el-form label-width="130px">
         <div class="form-header-grid">
           <el-form-item label="凭证日期">
@@ -660,6 +852,9 @@ onMounted(async () => {
 
       <template #footer>
         <el-button @click="visible = false">取消</el-button>
+        <el-button v-if="!editingId" type="success" :disabled="!isBalanced" @click="saveAndNew">
+          保存并新增 (Alt+S)
+        </el-button>
         <el-button type="primary" :disabled="!isBalanced" @click="save">
           {{ editingId ? '保存修改' : '保存草稿' }}
         </el-button>
@@ -730,6 +925,105 @@ onMounted(async () => {
         </el-table>
       </template>
     </el-drawer>
+
+    <!-- 凭证断号整理对话框 -->
+    <el-dialog v-model="reorderVisible" title="凭证断号整理与重排" width="460px">
+      <el-form label-width="100px">
+        <el-alert type="warning" :closable="false" style="margin-bottom: 16px;">
+          按照凭证日期顺次重排凭证号，消除因删除作废产生的空缺断号。重排后不可逆，请谨慎操作。
+        </el-alert>
+        <el-form-item label="会计年度">
+          <el-input-number v-model="reorderYear" :min="2000" :max="2099" style="width: 100%;" />
+        </el-form-item>
+        <el-form-item label="会计期间">
+          <el-select v-model="reorderPeriod" placeholder="全部期间（整年）" clearable style="width: 100%;">
+            <el-option label="全部期间（整年）" :value="''" />
+            <el-option v-for="m in 12" :key="m" :label="`${m} 月`" :value="m" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="reorderVisible = false">取消</el-button>
+        <el-button type="primary" :loading="reorderLoading" @click="executeReorder">立即重排</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 调入常用模板对话框 -->
+    <el-dialog v-model="templateModalVisible" title="选择常用凭证模板" width="750px">
+      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+        <el-radio-group v-model="templateCategory" size="small">
+          <el-radio-button label="ALL">全部</el-radio-button>
+          <el-radio-button label="SALARY">薪酬计提</el-radio-button>
+          <el-radio-button label="TAX">税费计缴</el-radio-button>
+          <el-radio-button label="EXPENSE">日常费用</el-radio-button>
+          <el-radio-button label="FINANCE">资金利息</el-radio-button>
+          <el-radio-button label="COMMON">通用模板</el-radio-button>
+        </el-radio-group>
+      </div>
+      <el-table :data="filteredTemplates" v-loading="templateLoading" border stripe max-height="380">
+        <el-table-column prop="name" label="模板名称" width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <b>{{ row.name }}</b>
+            <el-tag v-if="row.isBuiltIn" size="small" type="info" style="margin-left: 4px;">内置</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="summary" label="默认摘要" width="150" show-overflow-tooltip />
+        <el-table-column label="分录结构预览" min-width="240">
+          <template #default="{ row }">
+            <div v-for="e in row.entries" :key="e.lineNo" style="font-size: 12px; line-height: 1.6;">
+              <el-tag :type="e.direction === 'DEBIT' ? 'success' : 'warning'" size="small" style="margin-right: 4px;">
+                {{ e.direction === 'DEBIT' ? '借' : '贷' }}
+              </el-tag>
+              <span>{{ e.accountCode }} {{ e.accountName }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" align="center">
+          <template #default="{ row }">
+            <el-button type="primary" size="small" @click="applyTemplate(row)">应用</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <!-- 凭证批量导入对话框 -->
+    <el-dialog v-model="importVisible" title="批量导入记账凭证" width="600px">
+      <el-alert type="info" :closable="false" style="margin-bottom: 16px;">
+        支持上传包含一张或多张凭证的 Excel (.xlsx) 或 CSV 文件。系统将原子预分配凭证号，严格校验借贷平衡、末级科目以及未结账期间。
+      </el-alert>
+
+      <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 13px; color: var(--el-text-color-secondary);">
+          首次导入或核对格式？请先下载标准导入模板：
+        </span>
+        <el-button type="primary" plain size="small" @click="downloadImportTemplate">
+          📥 下载标准 Excel 模板
+        </el-button>
+      </div>
+
+      <el-upload
+        drag
+        action="#"
+        :http-request="handleCustomUpload"
+        :show-file-list="false"
+        accept=".xlsx,.csv"
+        :disabled="importLoading"
+      >
+        <el-icon class="el-icon--upload"><upload-filled /></el-icon>
+        <div class="el-upload__text">
+          将 Excel / CSV 凭证文件拖到此处，或 <em>点击上传</em>
+        </div>
+        <template #tip>
+          <div class="el-upload__tip" style="color: var(--el-text-color-secondary);">
+            仅支持 .xlsx 与 .csv 文件，文件大小不超过 20MB。单次导入支持包含多张凭证。
+          </div>
+        </template>
+      </el-upload>
+
+      <template #footer>
+        <el-button @click="importVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 记账凭证打印模态框 -->
     <VoucherPrintModal v-model="printVisible" :voucher="printTarget" />

@@ -22,6 +22,13 @@ const editVisible = ref(false); const editingId = ref<number | "">("");
 const editForm = reactive({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, startDate: "", endDate: "" });
 const isAdmin = computed(() => auth.canManageAccounting);
 
+const closingSuiteVisible = ref(false);
+const suitePeriod = ref<Period>();
+const accounts = ref<any[]>([]);
+const suiteProfitAccountId = ref<number | "">("");
+const closingSuiteLoading = ref(false);
+const suiteResult = ref<{ taxVoucher?: string; pnlVoucher?: string } | null>(null);
+
 async function load() { loading.value = true; try { rows.value = await api.get<Period[]>('/accounting-periods'); } finally { loading.value = false; } }
 async function create() { await api.post('/accounting-periods', form); visible.value = false; ElMessage.success('会计期间已创建'); await load(); }
 function openEdit(row: Period) {
@@ -46,6 +53,52 @@ async function reopen(row: Period) {
   await ElMessageBox.confirm(`确认反关账 ${row.periodCode}？`, '反关账', { type: 'warning' });
   await api.post(`/accounting-periods/${row.id}/reopen`); ElMessage.success('已反关账'); await load();
 }
+async function openClosingSuite(period: Period) {
+  suitePeriod.value = period;
+  suiteResult.value = null;
+  closingSuiteVisible.value = true;
+  if (!accounts.value.length) {
+    try {
+      accounts.value = await api.get<any[]>("/accounts");
+      const defaultProfit = accounts.value.find((a: any) => a.code === '4103' || a.name?.includes('本年利润'));
+      if (defaultProfit) {
+        suiteProfitAccountId.value = defaultProfit.id;
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+async function handleAccrueSurcharges() {
+  if (!suitePeriod.value) return;
+  closingSuiteLoading.value = true;
+  try {
+    const res = await api.post<any>('/tax/accrue-surcharges', { periodId: suitePeriod.value.id });
+    const voucherNo = res?.voucherNo || res?.voucher?.voucherNo || '已生成';
+    ElMessage.success(`附加税费计提凭证生成成功：${voucherNo}`);
+    if (!suiteResult.value) suiteResult.value = {};
+    suiteResult.value.taxVoucher = voucherNo;
+  } finally {
+    closingSuiteLoading.value = false;
+  }
+}
+async function handleCloseMonthlyPnl() {
+  if (!suitePeriod.value) return;
+  closingSuiteLoading.value = true;
+  try {
+    const body: any = { periodId: suitePeriod.value.id };
+    if (suiteProfitAccountId.value) {
+      body.profitAccountId = Number(suiteProfitAccountId.value);
+    }
+    const res = await api.post<any>('/year-end-closings/monthly-pnl', body);
+    const voucherNo = res?.voucherNo || res?.voucher?.voucherNo || '已生成';
+    ElMessage.success(`月度账结损益凭证生成成功：${voucherNo}`);
+    if (!suiteResult.value) suiteResult.value = {};
+    suiteResult.value.pnlVoucher = voucherNo;
+  } finally {
+    closingSuiteLoading.value = false;
+  }
+}
 function date(value: string | null) { return value ? value.slice(0, 10) : '-'; }
 function handleCheckRoute(path: string) {
   checklistVisible.value = false;
@@ -68,7 +121,7 @@ onMounted(load);
         <el-table-column label="状态"><template #default="{ row }"><el-tag :type="row.status === PERIOD_STATUS.OPEN ? 'success' : row.status === PERIOD_STATUS.LOCKED ? 'danger' : 'info'">{{ periodLabels[row.status] ?? row.status }}</el-tag></template></el-table-column>
         <el-table-column label="关账人"><template #default="{ row }">{{ row.closedBy?.displayName ?? '-' }}</template></el-table-column>
         <el-table-column label="关账时间"><template #default="{ row }">{{ formatOperationTime(row.closedAt) }}</template></el-table-column>
-        <el-table-column v-if="isAdmin" label="操作"><template #default="{ row }"><el-button v-if="row.status === PERIOD_STATUS.OPEN" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-if="row.status === PERIOD_STATUS.OPEN" link @click="inspect(row)">月结检查</el-button><el-button v-if="row.status === PERIOD_STATUS.OPEN" link type="danger" @click="closePeriod(row)">关账</el-button><el-button v-else-if="row.status === PERIOD_STATUS.CLOSED" link type="primary" @click="reopen(row)">反关账</el-button></template></el-table-column>
+        <el-table-column v-if="isAdmin" label="操作"><template #default="{ row }"><el-button v-if="row.status === PERIOD_STATUS.OPEN" link type="primary" @click="openClosingSuite(row)">期末结转</el-button><el-button v-if="row.status === PERIOD_STATUS.OPEN" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-if="row.status === PERIOD_STATUS.OPEN" link @click="inspect(row)">月结检查</el-button><el-button v-if="row.status === PERIOD_STATUS.OPEN" link type="danger" @click="closePeriod(row)">关账</el-button><el-button v-else-if="row.status === PERIOD_STATUS.CLOSED" link type="primary" @click="reopen(row)">反关账</el-button></template></el-table-column>
       </el-table>
     </el-card>
     <el-dialog v-model="visible" title="创建会计期间" width="360px">
@@ -84,6 +137,67 @@ onMounted(load);
       </el-form>
       <el-alert type="info" :closable="false" title="期间编号与日期范围相互独立，可设置跨月范围；日期范围不能与其他期间重叠。" />
       <template #footer><el-button @click="editVisible = false">取消</el-button><el-button type="primary" :disabled="!editForm.startDate || !editForm.endDate" @click="updatePeriod">保存</el-button></template>
+    </el-dialog>
+    <el-dialog v-model="closingSuiteVisible" :title="`期末自动结转套件 - ${suitePeriod?.periodCode ?? ''}`" width="600px">
+      <div v-loading="closingSuiteLoading">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="中国企业会计准则 (CAS) 期末规范结账流程"
+          description="按照标准核算规范，期末关账前需依次执行：1. 附加税费自动计提 2. 月度账结损益转入本年利润 3. 月结阻断项检查与试算平衡。"
+          style="margin-bottom: 20px"
+        />
+
+        <el-card shadow="never" style="margin-bottom: 16px;">
+          <template #header>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-weight:600;">第一步：一键计提附加税费</span>
+              <el-tag size="small" type="primary">增值税附加</el-tag>
+            </div>
+          </template>
+          <p style="font-size: 13px; color: #606266; margin-top: 0;">
+            自动扫描当期增值税应交税额，按法定费率（城市维护建设税 7%、教育费附加 3%、地方教育附加 2%）自动生成计提凭证，计入「税金及附加」与「应交税费」。
+          </p>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top: 12px;">
+            <span v-if="suiteResult?.taxVoucher" style="color: #67c23a; font-size: 13px;">
+              ✓ 已生成凭证：<strong>{{ suiteResult.taxVoucher }}</strong>
+            </span>
+            <span v-else style="color: #909399; font-size: 13px;">尚未生成当期计提凭证</span>
+            <el-button type="primary" plain @click="handleAccrueSurcharges">立即计提附加税费</el-button>
+          </div>
+        </el-card>
+
+        <el-card shadow="never" style="margin-bottom: 16px;">
+          <template #header>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-weight:600;">第二步：月度账结损益</span>
+              <el-tag size="small" type="success">损益清零</el-tag>
+            </div>
+          </template>
+          <p style="font-size: 13px; color: #606266; margin-top: 0;">
+            自动扫描当期所有损益类科目（收入、成本、税金、期间费用、营业外收支等）期末发生额，结转至「本年利润」科目，使当期损益类科目期末余额归零。
+          </p>
+          <el-form label-width="110px" style="margin-top: 12px;">
+            <el-form-item label="本年利润科目">
+              <el-select v-model="suiteProfitAccountId" filterable placeholder="请选择本年利润科目" style="width: 100%">
+                <el-option v-for="a in accounts" :key="a.id" :label="`${a.code} ${a.name}`" :value="a.id" />
+              </el-select>
+            </el-form-item>
+          </el-form>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top: 12px;">
+            <span v-if="suiteResult?.pnlVoucher" style="color: #67c23a; font-size: 13px;">
+              ✓ 已生成凭证：<strong>{{ suiteResult.pnlVoucher }}</strong>
+            </span>
+            <span v-else style="color: #909399; font-size: 13px;">尚未生成当期损益结转凭证</span>
+            <el-button type="success" plain :disabled="!suiteProfitAccountId" @click="handleCloseMonthlyPnl">立即结转损益</el-button>
+          </div>
+        </el-card>
+      </div>
+      <template #footer>
+        <el-button @click="closingSuiteVisible = false">关闭</el-button>
+        <el-button type="primary" @click="closingSuiteVisible = false; inspect(suitePeriod!)">下一步：月结检查 →</el-button>
+      </template>
     </el-dialog>
     <el-drawer v-model="checklistVisible" :title="`${checklistPeriod?.periodCode ?? ''} 月结检查`" size="580px"><el-alert :type="checklist.ready?'success':'error'" :title="checklist.ready?'可以关账':'存在阻断项，暂不能关账'" :closable="false"/><el-table :data="checklist.checks" class="close-checks"><el-table-column prop="name" label="检查项目"/><el-table-column label="结果" width="90"><template #default="{row}"><el-tag :type="row.level==='PASS'?'success':row.level==='WARN'?'warning':'danger'">{{row.level==='PASS'?'通过':row.level==='WARN'?'提醒':'阻断'}}</el-tag></template></el-table-column><el-table-column prop="message" label="说明"/><el-table-column label="操作" width="90"><template #default="{row}"><el-button v-if="row.route&&row.level!=='PASS'" link type="primary" @click="handleCheckRoute(row.route)">处理 →</el-button></template></el-table-column></el-table><template #footer><el-button v-if="checklistPeriod" @click="inspect(checklistPeriod)">重新检查</el-button><el-button v-if="checklist.ready&&checklistPeriod" type="primary" @click="closePeriod(checklistPeriod)">确认关账</el-button></template></el-drawer>
   </div>

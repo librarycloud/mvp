@@ -147,6 +147,42 @@ export class FakeVoucherRepository implements VoucherRepository {
     this.vouchers.set(id, item);
     return item;
   }
+
+  async reorder(fiscalYear: number, fiscalPeriod?: number) {
+    const list = [...this.vouchers.values()]
+      .filter((v) => v.fiscalYear === fiscalYear && (fiscalPeriod === undefined || v.fiscalPeriod === fiscalPeriod))
+      .sort((a, b) => a.voucherDate.getTime() - b.voucherDate.getTime() || a.id - b.id);
+    let gapsFixed = 0;
+    list.forEach((v, index) => {
+      const targetSeq = index + 1;
+      if (v.sequenceNo !== targetSeq) {
+        gapsFixed++;
+        v.sequenceNo = targetSeq;
+        (v as any).voucherNo = `${fiscalYear}-${String(targetSeq).padStart(6, "0")}`;
+      }
+    });
+    this.sequence = list.length + 1;
+    return { totalReordered: list.length, gapsFixed };
+  }
+
+  signedVouchers = new Set<number>();
+  async cashierSign(voucherId: number, actor: VoucherActor) {
+    this.signedVouchers.add(voucherId);
+    return { voucherId, signed: true, signedAt: new Date(), cashierId: actor.actorId };
+  }
+
+  async cashierJournal(query: { accountCode?: string; startDate: Date; endDate: Date }) {
+    return {
+      accountCode: query.accountCode ?? "1002",
+      startDate: query.startDate,
+      endDate: query.endDate,
+      openingBalance: "1000",
+      totalDebit: "500",
+      totalCredit: "200",
+      closingBalance: "1300",
+      entries: [],
+    };
+  }
 }
 
 export const debitAccountId = 701;

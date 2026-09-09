@@ -101,4 +101,95 @@ describe("ArApService", () => {
       data: { voucherId: 99 },
     }));
   });
+
+  it("calculates multi-bucket aging matrix grouped by party", async () => {
+    const service = new ArApService({} as any, periods);
+    (service as any).listDocuments = async () => [
+      {
+        id: 1,
+        documentNo: "AR-1",
+        amount: new Prisma.Decimal("100"),
+        settledAmount: new Prisma.Decimal("20"),
+        occurrenceDate: new Date("2026-07-01"),
+        dueDate: new Date("2026-07-10"),
+        customer: { id: 10, code: "C001", name: "客户甲", creditLimit: new Prisma.Decimal("10000") },
+      },
+      {
+        id: 2,
+        documentNo: "AR-2",
+        amount: new Prisma.Decimal("200"),
+        settledAmount: new Prisma.Decimal("0"),
+        occurrenceDate: new Date("2026-05-01"),
+        dueDate: new Date("2026-05-15"),
+        customer: { id: 10, code: "C001", name: "客户甲", creditLimit: new Prisma.Decimal("10000") },
+      },
+    ];
+
+    const matrix = await service.agingMatrix("receivable", new Date("2026-07-20T00:00:00.000Z"));
+    expect(matrix).toHaveLength(1);
+    expect(matrix[0]?.partyCode).toBe("C001");
+    // AR-1: due 2026-07-10, asOf 2026-07-20 => 10 days => within30 (80)
+    expect(matrix[0]?.within30).toBe("80");
+    // AR-2: due 2026-05-15, asOf 2026-07-20 => 66 days => days61to90 (200)
+    expect(matrix[0]?.days61to90).toBe("200");
+    expect(matrix[0]?.totalOutstanding).toBe("280");
+  });
+
+  it("generates statement of account with opening balance, movements, and closing balance", async () => {
+    const prisma = {
+      customer: { findFirst: vi.fn().mockResolvedValue({ id: 1, code: "C001", name: "客户甲", taxId: "91110000" }) },
+      companyProfile: { findFirst: vi.fn().mockResolvedValue({ companyName: "测试公司", taxpayerId: "91310000" }) },
+      receivable: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            documentNo: "AR-OLD",
+            description: "上月账单",
+            amount: new Prisma.Decimal("1000"),
+            occurrenceDate: new Date("2026-05-10"),
+            settlements: [
+              {
+                id: 1,
+                amount: new Prisma.Decimal("400"),
+                paymentDate: new Date("2026-05-20"),
+                status: 1, // POSTED
+                remark: "上月回款",
+                voucher: { voucherNo: "JZ-001" },
+              },
+            ],
+          },
+          {
+            id: 2,
+            documentNo: "AR-CURR",
+            description: "本月发票",
+            amount: new Prisma.Decimal("800"),
+            occurrenceDate: new Date("2026-06-05"),
+            settlements: [
+              {
+                id: 2,
+                amount: new Prisma.Decimal("300"),
+                paymentDate: new Date("2026-06-15"),
+                status: 1, // POSTED
+                remark: "本月回款",
+                voucher: { voucherNo: "JZ-002" },
+              },
+            ],
+          },
+        ]),
+      },
+    } as any;
+
+    const service = new ArApService(prisma, periods);
+    const statement = await service.statementOfAccount(1, "customer", new Date("2026-06-01"), new Date("2026-06-30"));
+
+    // Opening balance: 1000 - 400 = 600
+    expect(statement.openingBalance).toBe("600");
+    // In period: 800 increase, 300 settled
+    expect(statement.totalIncrease).toBe("800");
+    expect(statement.totalSettled).toBe("300");
+    // Closing balance: 600 + 800 - 300 = 1100
+    expect(statement.closingBalance).toBe("1100");
+    expect(statement.lines).toHaveLength(2);
+  });
 });
+

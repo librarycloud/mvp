@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { AppError } from "../../common/errors/app-error.js";
-import { ACCOUNTING_PERIOD_STATUS, INVOICE_STATUS } from "../../common/status-codes.js";
+import { ACCOUNTING_PERIOD_STATUS, INVOICE_STATUS, VOUCHER_STATUS } from "../../common/status-codes.js";
 import type { FileStorage } from "../../infrastructure/storage/file-storage.js";
 import type { InvoiceRepository } from "./invoice.repository.js";
 import type { InvoiceFilter, InvoiceImportContext, ManualInvoiceFields, ParsedInvoice } from "./invoice.types.js";
 import type { XmlInvoiceParser } from "./xml-invoice-parser.js";
 import type { AccountingPeriodRepository } from "../accounting-period/accounting-period.types.js";
+import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import type { PrismaClient } from "../../generated/prisma/client.js";
 
@@ -291,4 +292,207 @@ export class InvoiceService {
   }
 
   private database() { if (!this.prisma) throw new AppError("INVOICE_WORKFLOW_UNAVAILABLE", "当前运行环境未配置发票工作流数据库", 503); return this.prisma; }
+
+  async generateVoucher(
+    invoiceId: number,
+    options: {
+      expenseOrRevenueAccountId?: number;
+      settlementAccountId?: number;
+      summary?: string;
+    } = {},
+    actor: { actorId: number; role: string },
+  ) {
+    const prisma = this.database();
+    return prisma.$transaction(async (tx) => {
+      const invoice = await tx.invoice.findFirst({
+        where: { id: invoiceId, deletedAt: null },
+        include: { items: true },
+      });
+      if (!invoice) throw new AppError("INVOICE_NOT_FOUND", "电子发票不存在", 404);
+      if (invoice.voucherId) throw new AppError("INVOICE_ALREADY_HAS_VOUCHER", "该发票已生成记账凭证", 409);
+
+      const postingDate = invoice.issueDate;
+      const period = this.periodRepository
+        ? await this.periodRepository.findByPostingDate(postingDate)
+        : null;
+      if (period?.status === ACCOUNTING_PERIOD_STATUS.CLOSED) {
+        throw new AppError("ACCOUNTING_PERIOD_CLOSED", "开票日期所在会计期间已结账，无法生成凭证", 400);
+      }
+      const fiscalYear = period?.year ?? postingDate.getFullYear();
+      const fiscalPeriod = period?.month ?? postingDate.getMonth() + 1;
+
+      const findAccount = async (id?: number, codePrefix?: string, nameLike?: string) => {
+        if (id) {
+          const acc = await tx.account.findFirst({ where: { id, deletedAt: null, isEnabled: true, isLeaf: true } });
+          if (acc) return acc;
+        }
+        if (codePrefix) {
+          const acc = await tx.account.findFirst({
+            where: { code: { startsWith: codePrefix }, deletedAt: null, isEnabled: true, isLeaf: true },
+            orderBy: { code: "asc" },
+          });
+          if (acc) return acc;
+        }
+        if (nameLike) {
+          const acc = await tx.account.findFirst({
+            where: { name: { contains: nameLike }, deletedAt: null, isEnabled: true, isLeaf: true },
+            orderBy: { code: "asc" },
+          });
+          if (acc) return acc;
+        }
+        return null;
+      };
+
+      const isPurchase = invoice.direction === "PURCHASE" || (!invoice.direction && invoice.buyerName);
+      const summary = options.summary?.trim() || `${isPurchase ? "采购发票" : "销售发票"}-${invoice.invoiceNumber}-${invoice.sellerName || invoice.buyerName}`;
+
+      const entries: Array<{
+        lineNo: number;
+        accountId: number;
+        summary: string;
+        debitAmount: Prisma.Decimal;
+        creditAmount: Prisma.Decimal;
+      }> = [];
+
+      const ZERO = new Prisma.Decimal(0);
+
+      if (isPurchase) {
+        const expAcc = (await findAccount(options.expenseOrRevenueAccountId, "6602", "管理费用"))
+          ?? (await findAccount(undefined, "1405", "库存商品"))
+          ?? (await findAccount(undefined, "5001", "生产成本"));
+        if (!expAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未找到适用的费用或存货科目", 400);
+
+        const taxAcc = (await findAccount(undefined, "22210101", "进项税额"))
+          ?? (await findAccount(undefined, "2221", "应交增值税"));
+        if (!taxAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未找到应交增值税-进项税额科目", 400);
+
+        const settleAcc = (await findAccount(options.settlementAccountId, "2202", "应付账款"))
+          ?? (await findAccount(undefined, "1002", "银行存款"));
+        if (!settleAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未找到结算科目(应付账款/银行存款)", 400);
+
+        entries.push({
+          lineNo: 1,
+          accountId: expAcc.id,
+          summary,
+          debitAmount: invoice.totalAmountWithoutTax,
+          creditAmount: ZERO,
+        });
+
+        if (invoice.totalTaxAmount.greaterThan(0)) {
+          entries.push({
+            lineNo: 2,
+            accountId: taxAcc.id,
+            summary: `${summary}(进项税)`,
+            debitAmount: invoice.totalTaxAmount,
+            creditAmount: ZERO,
+          });
+        }
+
+        entries.push({
+          lineNo: entries.length + 1,
+          accountId: settleAcc.id,
+          summary,
+          debitAmount: ZERO,
+          creditAmount: invoice.totalTaxIncludedAmount,
+        });
+      } else {
+        const settleAcc = (await findAccount(options.settlementAccountId, "1122", "应收账款"))
+          ?? (await findAccount(undefined, "1002", "银行存款"));
+        if (!settleAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未找到结算科目(应收账款/银行存款)", 400);
+
+        const revAcc = (await findAccount(options.expenseOrRevenueAccountId, "6001", "主营业务收入"))
+          ?? (await findAccount(undefined, "6051", "其他业务收入"));
+        if (!revAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未找到适用的营业收入科目", 400);
+
+        const taxAcc = (await findAccount(undefined, "22210102", "销项税额"))
+          ?? (await findAccount(undefined, "2221", "应交增值税"));
+        if (!taxAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未找到应交增值税-销项税额科目", 400);
+
+        entries.push({
+          lineNo: 1,
+          accountId: settleAcc.id,
+          summary,
+          debitAmount: invoice.totalTaxIncludedAmount,
+          creditAmount: ZERO,
+        });
+
+        entries.push({
+          lineNo: 2,
+          accountId: revAcc.id,
+          summary,
+          debitAmount: ZERO,
+          creditAmount: invoice.totalAmountWithoutTax,
+        });
+
+        if (invoice.totalTaxAmount.greaterThan(0)) {
+          entries.push({
+            lineNo: 3,
+            accountId: taxAcc.id,
+            summary: `${summary}(销项税)`,
+            debitAmount: ZERO,
+            creditAmount: invoice.totalTaxAmount,
+          });
+        }
+      }
+
+      let resolvedPeriodId = period?.id;
+      if (!resolvedPeriodId) {
+        const p = await tx.accountingPeriod?.findFirst?.({
+          where: { year: fiscalYear, month: fiscalPeriod, deletedAt: null },
+        });
+        resolvedPeriodId = p?.id ?? 1;
+      }
+
+      const total = invoice.totalTaxIncludedAmount;
+      const sequence = await getNextVoucherNumber(tx, fiscalYear);
+
+      const voucher = await tx.voucher.create({
+        data: {
+          ...sequence,
+          fiscalYear,
+          fiscalPeriod,
+          voucherDate: postingDate,
+          postingDate,
+          periodId: resolvedPeriodId,
+          summary,
+          sourceType: "INVOICE",
+          category: "OTHER",
+          status: VOUCHER_STATUS.POSTED,
+          totalDebit: total,
+          totalCredit: total,
+          createdById: actor.actorId,
+          reviewerId: actor.actorId,
+          reviewedAt: new Date(),
+          postedById: actor.actorId,
+          postedAt: new Date(),
+          entries: { create: entries },
+        },
+      });
+
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: { voucherId: voucher.id },
+      });
+
+      await tx.voucherSource.create({
+        data: {
+          voucherId: voucher.id,
+          invoiceId,
+        },
+      });
+
+      await tx.accountingEvent.create({
+        data: {
+          eventType: "INVOICE_VOUCHER_GENERATED",
+          sourceType: "Invoice",
+          sourceId: invoiceId,
+          voucherId: voucher.id,
+          description: `发票【${invoice.invoiceNumber}】自动生成记账凭证【${voucher.voucherNo}】`,
+          createdById: actor.actorId,
+        },
+      });
+
+      return voucher;
+    });
+  }
 }

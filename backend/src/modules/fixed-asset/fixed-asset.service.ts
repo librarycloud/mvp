@@ -6,6 +6,7 @@ import type { AuthRole } from "../auth/auth.types.js";
 import type { AccountingPeriodResolver } from "../accounting-period/accounting-period.types.js";
 import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
 import { VOUCHER_STATUS } from "../../common/status-codes.js";
+import { calculateMonthlyDepreciation } from "../depreciation/depreciation-calculator.js";
 
 type Actor = { actorId: number; role: AuthRole };
 const ZERO = new Prisma.Decimal(0);
@@ -81,14 +82,8 @@ export class FixedAssetService {
         where: { assetId_periodId: { assetId: asset.id, periodId: period.id } },
       });
       let periodDeprAmount = ZERO;
-      if (!existingDepr && asset.depreciationMethod === "STRAIGHT_LINE" && asset.startUseDate < period.startDate) {
-        const depreciable = asset.originalValue.minus(asset.residualValue);
-        const remaining = depreciable.minus(initialAcc);
-        if (remaining.greaterThan(0)) {
-          const monthly = depreciable.div(asset.usefulLifeMonths).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-          const postableRemaining = remaining.decimalPlaces() <= 2 ? remaining : remaining.toDecimalPlaces(2, Prisma.Decimal.ROUND_DOWN);
-          periodDeprAmount = Prisma.Decimal.min(monthly, postableRemaining);
-        }
+      if (!existingDepr && asset.startUseDate < period.startDate) {
+        periodDeprAmount = calculateMonthlyDepreciation(asset, period);
       }
       const accumulated = initialAcc.plus(periodDeprAmount);
       const netBookValue = asset.originalValue.minus(accumulated);
@@ -146,14 +141,16 @@ export class FixedAssetService {
   private data(input: any, partial = false) {
     const original = new Prisma.Decimal(String(input.originalValue));
     const rate = new Prisma.Decimal(String(input.residualRate));
-    if (input.depreciationMethod !== "STRAIGHT_LINE" || original.lessThanOrEqualTo(0) || rate.lessThan(0) || rate.greaterThanOrEqualTo(1) || !Number.isInteger(input.usefulLifeMonths) || input.usefulLifeMonths < 1) throw new AppError("INVALID_FIXED_ASSET", "固定资产折旧参数无效", 400);
+    const validMethods = new Set(["STRAIGHT_LINE", "DOUBLE_DECLINING", "SUM_OF_YEARS"]);
+    const method = String(input.depreciationMethod || "STRAIGHT_LINE");
+    if (!validMethods.has(method) || original.lessThanOrEqualTo(0) || rate.lessThan(0) || rate.greaterThanOrEqualTo(1) || !Number.isInteger(input.usefulLifeMonths) || input.usefulLifeMonths < 1) throw new AppError("INVALID_FIXED_ASSET", "固定资产折旧参数无效", 400);
     const purchaseDate = new Date(input.purchaseDate); const startUseDate = new Date(input.startUseDate);
     if (Number.isNaN(purchaseDate.getTime()) || Number.isNaN(startUseDate.getTime()) || startUseDate < purchaseDate) throw new AppError("INVALID_FIXED_ASSET_DATE", "启用日期不能早于购买日期", 400);
     const residualValue = original.mul(rate).toDecimalPlaces(4);
     const accumulated = partial ? new Prisma.Decimal(String(input.accumulatedDepreciation ?? "0")) : ZERO;
     const depreciationExpenseAccountId = input.depreciationExpenseAccountId ? Number(input.depreciationExpenseAccountId) : null;
     if (depreciationExpenseAccountId !== null && (!Number.isInteger(depreciationExpenseAccountId) || depreciationExpenseAccountId < 1)) throw new AppError("INVALID_DEPRECIATION_EXPENSE_ACCOUNT", "折旧费用科目无效", 400);
-    return { assetNo: String(input.assetNo).trim(), name: String(input.name).trim(), category: String(input.category).trim(), purchaseDate, startUseDate, originalValue: original, residualRate: rate, residualValue, depreciationMethod: "STRAIGHT_LINE", usefulLifeMonths: input.usefulLifeMonths, accumulatedDepreciation: accumulated, netValue: original.minus(accumulated), department: input.department?.trim() || null, custodian: input.custodian?.trim() || null, depreciationExpenseAccountId };
+    return { assetNo: String(input.assetNo).trim(), name: String(input.name).trim(), category: String(input.category).trim(), purchaseDate, startUseDate, originalValue: original, residualRate: rate, residualValue, depreciationMethod: method, usefulLifeMonths: input.usefulLifeMonths, accumulatedDepreciation: accumulated, netValue: original.minus(accumulated), department: input.department?.trim() || null, custodian: input.custodian?.trim() || null, depreciationExpenseAccountId };
   }
 
   private async validateDisposalAccounts(tx: Prisma.TransactionClient, fixedAssetId: number, accumulatedId: number, clearingId: number, gainLossId: number, proceedsId: number | undefined, proceeds: Prisma.Decimal, customProceeds: boolean) {

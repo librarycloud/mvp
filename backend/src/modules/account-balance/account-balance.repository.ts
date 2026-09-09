@@ -6,6 +6,7 @@ export interface AccountBalanceRepository {
   listAccounts(): Promise<BalanceAccount[]>;
   aggregateBefore(startDate: Date): Promise<DebitCreditTotal[]>;
   aggregatePeriod(query: AccountBalanceQuery): Promise<DebitCreditTotal[]>;
+  listAuxiliaryEntries(postingDate: { lt?: Date; gte?: Date; lte?: Date }, accountId?: number, dimensionId?: number): Promise<any[]>;
 }
 
 export class PrismaAccountBalanceRepository implements AccountBalanceRepository {
@@ -27,6 +28,26 @@ export class PrismaAccountBalanceRepository implements AccountBalanceRepository 
 
   async aggregatePeriod(query: AccountBalanceQuery) {
     return this.aggregate({ gte: query.startDate, lte: query.endDate });
+  }
+
+  async listAuxiliaryEntries(postingDate: { lt?: Date; gte?: Date; lte?: Date }, accountId?: number, dimensionId?: number) {
+    return this.prisma.voucherEntryDimension.findMany({
+      where: {
+        ...(dimensionId ? { dimensionId } : {}),
+        voucherEntry: {
+          deletedAt: null,
+          ...(accountId ? { accountId } : {}),
+          voucher: { status: VOUCHER_STATUS.POSTED, deletedAt: null, postingDate },
+        },
+      },
+      include: {
+        voucherEntry: {
+          select: { accountId: true, debitAmount: true, creditAmount: true, account: { select: { id: true, code: true, name: true, normalDirection: true } } },
+        },
+        dimension: { select: { id: true, code: true, name: true } },
+        dimensionMember: { select: { id: true, code: true, name: true } },
+      },
+    });
   }
 
   private async aggregate(postingDate: { lt?: Date; gte?: Date; lte?: Date }) {

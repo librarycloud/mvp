@@ -22,3 +22,33 @@ export interface AccountBalanceQuery {
   endDate: Date;
   includeZero: boolean;
 }
+
+export interface AuxiliaryBalanceQuery {
+  startDate: Date;
+  endDate: Date;
+  accountId?: number | undefined;
+  dimensionId?: number | undefined;
+  includeZero?: boolean | undefined;
+}
+
+export interface AuxiliaryBalanceRow {
+  accountId: number;
+  accountCode: string;
+  accountName: string;
+  dimensionId: number;
+  dimensionCode: string;
+  dimensionName: string;
+  memberId: number;
+  memberCode: string;
+  memberName: string;
+  openingDebit: string;
+  openingCredit: string;
+  openingDirection: "DEBIT" | "CREDIT" | "FLAT";
+  openingBalance: string;
+  periodDebit: string;
+  periodCredit: string;
+  closingDebit: string;
+  closingCredit: string;
+  closingDirection: "DEBIT" | "CREDIT" | "FLAT";
+  closingBalance: string;
+}

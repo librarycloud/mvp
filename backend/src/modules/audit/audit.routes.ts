@@ -21,7 +21,14 @@ const query = Type.Object({
   endAt: Type.Optional(Type.String({ format: "date-time" })),
 }, { additionalProperties: false });
 
+const archiveQuery = Type.Object({
+  fiscalYear: Type.Optional(Type.Integer({ minimum: 2000, maximum: 9999 })),
+  download: Type.Optional(Type.Boolean()),
+}, { additionalProperties: false });
+
 export async function auditRoutes(app: FastifyInstance, options: { controller: AuditController }) {
   app.get("/", { preHandler: admin, schema: { tags: ["审计中心"], security: [{ bearerAuth: [] }], querystring: query }, handler: options.controller.list });
   app.get("/export.csv", { preHandler: admin, schema: { tags: ["审计中心"], security: [{ bearerAuth: [] }], querystring: query }, handler: options.controller.exportCsv });
+  app.get("/export-archive", { preHandler: admin, schema: { tags: ["审计中心"], security: [{ bearerAuth: [] }], querystring: archiveQuery }, handler: options.controller.exportArchive });
 }
+

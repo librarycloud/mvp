@@ -246,6 +246,212 @@ export class ArApService {
     return rows.map(row => { const remaining = row.amount.minus(row.settledAmount); const due = row.dueDate ?? row.occurrenceDate; const days = Math.max(0, Math.floor((asOf.getTime() - due.getTime()) / 86_400_000)); const party = "customer" in row ? row.customer.name : row.supplier.name; return { id: row.id, documentNo: row.documentNo, party, dueDate: row.dueDate, outstanding: remaining, daysOverdue: days, bucket: days === 0 ? "CURRENT" : days <= 30 ? "1-30" : days <= 60 ? "31-60" : days <= 90 ? "61-90" : "90+" }; }).filter(row => row.outstanding.greaterThan(0));
   }
 
+  async agingMatrix(kind: ArApDocumentKind, asOf = new Date()) {
+    const rows = await this.listDocuments(kind, undefined, undefined);
+    interface MatrixRow {
+      partyId: number;
+      partyCode: string;
+      partyName: string;
+      creditLimit: string;
+      within30: Prisma.Decimal;
+      days31to60: Prisma.Decimal;
+      days61to90: Prisma.Decimal;
+      days91to180: Prisma.Decimal;
+      days181to365: Prisma.Decimal;
+      over365: Prisma.Decimal;
+      totalOutstanding: Prisma.Decimal;
+    }
+
+    const map = new Map<number, MatrixRow>();
+    for (const row of rows) {
+      const remaining = row.amount.minus(row.settledAmount);
+      if (remaining.lessThanOrEqualTo(0)) continue;
+      const party = "customer" in row ? row.customer : row.supplier;
+      let agg = map.get(party.id);
+      if (!agg) {
+        agg = {
+          partyId: party.id,
+          partyCode: party.code,
+          partyName: party.name,
+          creditLimit: party.creditLimit.toString(),
+          within30: ZERO,
+          days31to60: ZERO,
+          days61to90: ZERO,
+          days91to180: ZERO,
+          days181to365: ZERO,
+          over365: ZERO,
+          totalOutstanding: ZERO,
+        };
+        map.set(party.id, agg);
+      }
+      const due = row.dueDate ?? row.occurrenceDate;
+      const days = Math.max(0, Math.floor((asOf.getTime() - due.getTime()) / 86_400_000));
+      if (days <= 30) {
+        agg.within30 = agg.within30.plus(remaining);
+      } else if (days <= 60) {
+        agg.days31to60 = agg.days31to60.plus(remaining);
+      } else if (days <= 90) {
+        agg.days61to90 = agg.days61to90.plus(remaining);
+      } else if (days <= 180) {
+        agg.days91to180 = agg.days91to180.plus(remaining);
+      } else if (days <= 365) {
+        agg.days181to365 = agg.days181to365.plus(remaining);
+      } else {
+        agg.over365 = agg.over365.plus(remaining);
+      }
+      agg.totalOutstanding = agg.totalOutstanding.plus(remaining);
+    }
+
+    return [...map.values()]
+      .map((row) => ({
+        partyId: row.partyId,
+        partyCode: row.partyCode,
+        partyName: row.partyName,
+        creditLimit: row.creditLimit,
+        within30: row.within30.toString(),
+        days31to60: row.days31to60.toString(),
+        days61to90: row.days61to90.toString(),
+        days91to180: row.days91to180.toString(),
+        days181to365: row.days181to365.toString(),
+        over365: row.over365.toString(),
+        totalOutstanding: row.totalOutstanding.toString(),
+      }))
+      .sort((a, b) => new Prisma.Decimal(b.totalOutstanding).comparedTo(new Prisma.Decimal(a.totalOutstanding)));
+  }
+
+  async statementOfAccount(partyId: number, kind: ArApPartyKind, startDate: Date, endDate: Date) {
+    if (startDate > endDate) throw new AppError("INVALID_DATE_RANGE", "开始日期不能晚于结束日期", 400);
+    const party = await this.requireParty(kind, partyId);
+    const company = await this.prisma.companyProfile.findFirst({ where: { deletedAt: null } });
+
+    let priorDocTotal = ZERO;
+    let priorSettlementTotal = ZERO;
+    const periodDocs: Array<{ id: number; date: Date; documentNo: string; description: string | null; amount: Prisma.Decimal }> = [];
+    const periodSettlements: Array<{ id: number; date: Date; settlementNo: string; description: string | null; amount: Prisma.Decimal }> = [];
+
+    if (kind === "customer") {
+      const allDocs = await this.prisma.receivable.findMany({
+        where: { customerId: partyId, deletedAt: null },
+        include: { settlements: { where: { deletedAt: null, status: VOUCHER_STATUS.POSTED }, include: { voucher: true } } },
+      });
+      for (const doc of allDocs) {
+        if (doc.occurrenceDate < startDate) {
+          priorDocTotal = priorDocTotal.plus(doc.amount);
+        } else if (doc.occurrenceDate <= endDate) {
+          periodDocs.push({ id: doc.id, date: doc.occurrenceDate, documentNo: doc.documentNo, description: doc.description, amount: doc.amount });
+        }
+        for (const s of doc.settlements) {
+          if (s.paymentDate < startDate) {
+            priorSettlementTotal = priorSettlementTotal.plus(s.amount);
+          } else if (s.paymentDate <= endDate) {
+            periodSettlements.push({ id: s.id, date: s.paymentDate, settlementNo: s.voucher?.voucherNo ?? `REC-${s.id}`, description: s.remark, amount: s.amount });
+          }
+        }
+      }
+    } else {
+      const allDocs = await this.prisma.payable.findMany({
+        where: { supplierId: partyId, deletedAt: null },
+        include: { settlements: { where: { deletedAt: null, status: VOUCHER_STATUS.POSTED }, include: { voucher: true } } },
+      });
+      for (const doc of allDocs) {
+        if (doc.occurrenceDate < startDate) {
+          priorDocTotal = priorDocTotal.plus(doc.amount);
+        } else if (doc.occurrenceDate <= endDate) {
+          periodDocs.push({ id: doc.id, date: doc.occurrenceDate, documentNo: doc.documentNo, description: doc.description, amount: doc.amount });
+        }
+        for (const s of doc.settlements) {
+          if (s.paymentDate < startDate) {
+            priorSettlementTotal = priorSettlementTotal.plus(s.amount);
+          } else if (s.paymentDate <= endDate) {
+            periodSettlements.push({ id: s.id, date: s.paymentDate, settlementNo: s.voucher?.voucherNo ?? `PAY-${s.id}`, description: s.remark, amount: s.amount });
+          }
+        }
+      }
+    }
+
+    const openingBalance = priorDocTotal.minus(priorSettlementTotal);
+    let runningBalance = openingBalance;
+
+    interface StatementItem {
+      date: string;
+      type: string;
+      documentNo: string;
+      description: string;
+      increase: string;
+      settlement: string;
+      balance: string;
+    }
+
+    const rawItems: Array<{ date: Date; type: string; documentNo: string; description: string; increase: Prisma.Decimal; settlement: Prisma.Decimal }> = [];
+    for (const doc of periodDocs) {
+      rawItems.push({
+        date: doc.date,
+        type: kind === "customer" ? "应收账单" : "应付账单",
+        documentNo: doc.documentNo,
+        description: doc.description || "",
+        increase: doc.amount,
+        settlement: ZERO,
+      });
+    }
+    for (const s of periodSettlements) {
+      rawItems.push({
+        date: s.date,
+        type: kind === "customer" ? "收款核销" : "付款核销",
+        documentNo: s.settlementNo,
+        description: s.description || "",
+        increase: ZERO,
+        settlement: s.amount,
+      });
+    }
+
+    rawItems.sort((a, b) => a.date.getTime() - b.date.getTime() || (a.increase.isZero() ? 1 : -1));
+
+    const lines: StatementItem[] = [];
+    let totalIncrease = ZERO;
+    let totalSettled = ZERO;
+
+    for (const item of rawItems) {
+      totalIncrease = totalIncrease.plus(item.increase);
+      totalSettled = totalSettled.plus(item.settlement);
+      runningBalance = runningBalance.plus(item.increase).minus(item.settlement);
+      lines.push({
+        date: item.date.toISOString().slice(0, 10),
+        type: item.type,
+        documentNo: item.documentNo,
+        description: item.description,
+        increase: item.increase.toString(),
+        settlement: item.settlement.toString(),
+        balance: runningBalance.toString(),
+      });
+    }
+
+    return {
+      party: {
+        id: party.id,
+        code: party.code,
+        name: party.name,
+        taxId: party.taxId ?? "",
+        contact: party.contact ?? "",
+        phone: party.phone ?? "",
+        address: party.address ?? "",
+      },
+      company: {
+        name: company?.name ?? "本公司",
+        taxpayerId: company?.unifiedSocialCreditCode ?? "",
+        contactPhone: company?.phone ?? "",
+      },
+      period: {
+        startDate: startDate.toISOString().slice(0, 10),
+        endDate: endDate.toISOString().slice(0, 10),
+      },
+      openingBalance: openingBalance.toString(),
+      totalIncrease: totalIncrease.toString(),
+      totalSettled: totalSettled.toString(),
+      closingBalance: runningBalance.toString(),
+      lines,
+    };
+  }
+
   async listFollowUps(query: { status?: number; due?: "today" | "overdue" | "all" } = {}) {
     const today = new Date(); today.setUTCHours(0, 0, 0, 0);
     const due = query.due === "overdue" ? { lt: today } : query.due === "today" ? { equals: today } : undefined;

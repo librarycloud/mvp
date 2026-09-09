@@ -30,4 +30,18 @@ export class FakeAccountBalanceRepository implements AccountBalanceRepository {
   async aggregatePeriod(_query: AccountBalanceQuery) {
     return this.period;
   }
+
+  auxiliaryEntries: any[] = [];
+  async listAuxiliaryEntries(
+    postingDate: { lt?: Date; gte?: Date; lte?: Date },
+    _accountId?: number,
+    _dimensionId?: number,
+  ) {
+    return this.auxiliaryEntries.filter((e) => {
+      if (postingDate.lt && e.date >= postingDate.lt) return false;
+      if (postingDate.gte && e.date < postingDate.gte) return false;
+      if (postingDate.lte && e.date > postingDate.lte) return false;
+      return true;
+    });
+  }
 }

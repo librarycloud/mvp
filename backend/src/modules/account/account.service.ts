@@ -57,6 +57,16 @@ export class AccountService {
     this.ensureName(name);
     await this.ensureCodeAvailable(code);
     const parent = await this.getParent(input.parentId ?? null);
+    if (parent) {
+      const voucherCount = await this.repository.countVoucherEntries(parent.id);
+      if (voucherCount > 0) {
+        throw new AppError(
+          "ACCOUNT_HAS_VOUCHERS",
+          `上级科目（${parent.code} ${parent.name}）已有 ${voucherCount} 条记账凭证发生额，禁止直接增设下级明细科目；请先通过调账凭证转出余额后再细化核算`,
+          409,
+        );
+      }
+    }
     this.validateParent(code, input.category, input.normalDirection, parent);
 
     const data: CreateAccountData = {
@@ -92,6 +102,16 @@ export class AccountService {
     const effectiveParent =
       input.parentId === undefined ? await this.getParent(current.parentId) : parent ?? null;
     this.validateParent(code, category, direction, effectiveParent);
+
+    const directionChanged = input.normalDirection !== undefined && input.normalDirection !== current.normalDirection;
+    const categoryChanged = input.category !== undefined && input.category !== current.category;
+    if (directionChanged || categoryChanged) {
+      const voucherCount = await this.repository.countVoucherEntries(current.id);
+      if (voucherCount > 0) {
+        const fieldDesc = directionChanged && categoryChanged ? "余额方向与科目类别" : directionChanged ? "余额方向" : "科目类别";
+        throw new AppError("ACCOUNT_HAS_VOUCHERS", `该科目已有记账凭证发生额，禁止修改${fieldDesc}`, 409);
+      }
+    }
 
     const data: UpdateAccountData = { maintainedById: context.actorId };
     if (input.code !== undefined) data.code = code;

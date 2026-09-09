@@ -37,4 +37,16 @@ export interface VoucherRepository {
     },
     actor: VoucherActor,
   ): Promise<unknown>;
+  reorder(fiscalYear: number, fiscalPeriod?: number, actor?: VoucherActor): Promise<{ totalReordered: number; gapsFixed: number }>;
+  cashierSign(voucherId: number, actor: VoucherActor): Promise<{ voucherId: number; signed: boolean; signedAt: Date; cashierId: number }>;
+  cashierJournal(query: { accountCode?: string; startDate: Date; endDate: Date }): Promise<{
+    accountCode: string;
+    startDate: Date;
+    endDate: Date;
+    openingBalance: string;
+    totalDebit: string;
+    totalCredit: string;
+    closingBalance: string;
+    entries: any[];
+  }>;
 }

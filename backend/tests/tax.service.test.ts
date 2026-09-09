@@ -93,4 +93,37 @@ describe("TaxService", () => {
     });
     expect(result).toEqual(saved);
   });
+
+  it("accrues surcharges based on VAT payable", async () => {
+    const mockTx = {
+      accountingPeriod: {
+        findFirst: vi.fn().mockResolvedValue({ id: 5, year: 2026, month: 7, periodCode: "2026-07", endDate: new Date("2026-07-31") }),
+      },
+      taxDeclaration: {
+        findFirst: vi.fn().mockResolvedValue({ id: 1, declaredAmount: new Prisma.Decimal("10000") }),
+      },
+      account: {
+        findFirst: vi.fn()
+          .mockResolvedValueOnce({ id: 6403, code: "6403", name: "税金及附加" })
+          .mockResolvedValueOnce({ id: 222103, code: "222103", name: "应交税费-附加税" }),
+      },
+      $executeRaw: vi.fn(),
+      $queryRaw: vi.fn().mockResolvedValue([{ next_value: 1 }]),
+      voucherSequence: { update: vi.fn() },
+      voucher: {
+        create: vi.fn().mockImplementation((args) => ({ id: 99, ...args.data })),
+      },
+    };
+
+    const prisma = {
+      $transaction: vi.fn(async (fn) => fn(mockTx)),
+    } as any;
+
+    const service = new TaxService(prisma);
+    const voucher = await service.accrueSurcharges(5, { actorId: 1, role: "ADMIN" });
+    expect(voucher.id).toBe(99);
+    // 10000 * (7% + 3% + 2%) = 1200
+    expect(voucher.totalDebit.toString()).toBe("1200");
+    expect(voucher.totalCredit.toString()).toBe("1200");
+  });
 });

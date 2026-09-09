@@ -15,9 +15,11 @@ interface AccountOption {
   isEnabled: boolean;
 }
 
-type LedgerMode = "general" | "detail" | "balances" | "trial";
+type LedgerMode = "general" | "detail" | "balances" | "trial" | "auxiliary";
 const router = useRouter();
 const accounts = ref<AccountOption[]>([]);
+const dimensions = ref<any[]>([]);
+const dimensionId = ref<number | "">("");
 const periods = ref<any[]>([]);
 const selectedPeriodId = ref<number | "">("");
 const accountId = ref<number | "">("");
@@ -35,12 +37,14 @@ const postableAccounts = computed(() => accounts.value.filter((account) => accou
 async function loadAccounts() {
   accountsLoading.value = true;
   try {
-    const [accountList, periodList] = await Promise.all([
+    const [accountList, periodList, dimList] = await Promise.all([
       api.get<AccountOption[]>("/accounts?tree=false&isEnabled=true"),
       api.get<any[]>("/accounting-periods"),
+      api.get<any[]>("/dimensions").catch(() => []),
     ]);
     accounts.value = accountList;
     periods.value = periodList;
+    dimensions.value = dimList;
   } finally {
     accountsLoading.value = false;
   }
@@ -65,7 +69,9 @@ async function query() {
         ? `/detail-ledger?accountId=${accountId.value}&${dates}`
         : mode.value === "balances"
           ? `/account-balances?${dates}&includeZero=false`
-          : `/trial-balance?${dates}`;
+          : mode.value === "auxiliary"
+            ? `/account-balances/auxiliary?${dates}&includeZero=false${accountId.value ? `&accountId=${accountId.value}` : ''}${dimensionId.value ? `&dimensionId=${dimensionId.value}` : ''}`
+            : `/trial-balance?${dates}`;
     data.value = await api.get(path);
   } finally {
     loading.value = false;
@@ -151,6 +157,22 @@ function exportLedger() {
       r.periodCredit ?? "0.00",
       r.closing?.amount ?? "0.00",
     ]);
+  } else if (mode.value === "auxiliary") {
+    filename = `科目辅助核算余额表_${startDate.value}至${endDate.value}`;
+    headers = ["科目编码", "科目名称", "核算类别", "项目编码", "项目名称", "期初方向", "期初余额", "本期借方", "本期贷方", "期末方向", "期末余额"];
+    exportRows = tableRows.value.map((r) => [
+      r.accountCode ?? "",
+      r.accountName ?? "",
+      r.dimensionName ?? "",
+      r.memberCode ?? "",
+      r.memberName ?? "",
+      r.openingDirection ?? "",
+      r.openingBalance ?? "0.00",
+      r.periodDebit ?? "0.00",
+      r.periodCredit ?? "0.00",
+      r.closingDirection ?? "",
+      r.closingBalance ?? "0.00",
+    ]);
   } else {
     filename = `试算平衡表_${startDate.value}至${endDate.value}`;
     headers = ["科目编码", "科目名称", "期初借方", "期初贷方", "本期借方", "本期贷方", "期末借方", "期末贷方"];
@@ -194,21 +216,22 @@ onMounted(loadAccounts);
 
     <el-card shadow="never">
       <div class="filter-row">
-        <el-select v-model="mode" style="width: 140px" @change="changeMode">
+        <el-select v-model="mode" style="width: 170px" @change="changeMode">
           <el-option label="总账" value="general"/>
           <el-option label="明细账" value="detail"/>
           <el-option label="科目余额表" value="balances"/>
+          <el-option label="科目辅助核算余额表" value="auxiliary"/>
           <el-option label="试算平衡表" value="trial"/>
         </el-select>
 
         <el-select
-          v-if="needsAccount"
+          v-if="needsAccount || mode === 'auxiliary'"
           v-model="accountId"
           filterable
           clearable
           :loading="accountsLoading"
-          placeholder="搜索科目编码或名称"
-          style="width: 260px"
+          :placeholder="mode === 'auxiliary' ? '科目 (全部)' : '搜索科目编码或名称'"
+          style="width: 240px"
         >
           <el-option
             v-for="account in postableAccounts"
@@ -216,6 +239,16 @@ onMounted(loadAccounts);
             :label="`${account.code} ${account.name}`"
             :value="account.id"
           />
+        </el-select>
+
+        <el-select
+          v-if="mode === 'auxiliary'"
+          v-model="dimensionId"
+          clearable
+          placeholder="辅助核算类型 (全部)"
+          style="width: 170px"
+        >
+          <el-option v-for="d in dimensions" :key="d.id" :label="`${d.code} ${d.name}`" :value="d.id" />
         </el-select>
 
         <el-select
@@ -277,6 +310,36 @@ onMounted(loadAccounts);
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="drillToDetail(row.account.id)">穿透明细</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-table v-else-if="mode === 'auxiliary'" :data="pagedRows" table-layout="auto" stripe border>
+        <el-table-column prop="accountCode" label="科目编码" width="100" />
+        <el-table-column prop="accountName" label="科目名称" min-width="130" show-overflow-tooltip />
+        <el-table-column prop="dimensionName" label="核算类别" width="110" />
+        <el-table-column label="核算项目" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.memberCode }} {{ row.memberName }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="期初余额" align="right" width="120">
+          <template #default="{ row }">
+            <span v-if="row.openingDirection !== 'FLAT'">{{ row.openingDirection === 'DEBIT' ? '借' : '贷' }} {{ row.openingBalance }}</span>
+            <span v-else>平</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="periodDebit" label="本期借方" align="right" width="110" />
+        <el-table-column prop="periodCredit" label="本期贷方" align="right" width="110" />
+        <el-table-column label="期末余额" align="right" width="120">
+          <template #default="{ row }">
+            <span v-if="row.closingDirection !== 'FLAT'">{{ row.closingDirection === 'DEBIT' ? '借' : '贷' }} {{ row.closingBalance }}</span>
+            <span v-else>平</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" size="small" @click="drillToDetail(row.accountId)">穿透明细</el-button>
           </template>
         </el-table-column>
       </el-table>
