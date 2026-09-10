@@ -242,7 +242,11 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
     </aside>
     <section class="workspace">
       <header class="topbar">
-        <div><el-button class="mobile-menu-toggle" text :icon="MenuIcon" title="打开菜单" aria-label="打开菜单" @click="mobileMenuOpen=true"/><b>{{ $route.meta.title ?? "财务工作台" }}</b><span>中国企业会计准则</span></div>
+        <div>
+          <el-button class="mobile-menu-toggle" text :icon="MenuIcon" title="打开菜单" aria-label="打开菜单" @click="mobileMenuOpen=true"/>
+          <b style="font-size: 15px; color: #152332;">企业财务系统</b>
+          <span style="background: #eef2f6; padding: 2px 8px; border-radius: 4px; font-size: 12px; color: #64748b;">中国企业会计准则</span>
+        </div>
         <div class="topbar-user">
           <el-tag :type="auth.user?.role === 'ADMIN' ? 'success' : 'info'">{{ auth.user ? ROLE_LABELS[auth.user.role] : "" }}</el-tag>
           <span class="topbar-user-name">{{ auth.user?.displayName ?? "" }}</span>
@@ -305,12 +309,12 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
 /* TabBar 多标签页样式 */
 .tabs-nav-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   background: #f8fafc;
-  border-bottom: 1px solid var(--el-border-color-light);
-  padding: 4px 16px 0;
-  height: 38px;
+  border-bottom: 1px solid #dcdfe6;
+  padding: 8px 16px 0;
+  height: 40px;
   box-sizing: border-box;
 }
 
@@ -328,34 +332,33 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 12px;
-  background: #eef2f6;
-  border: 1px solid var(--el-border-color-lighter);
+  padding: 0 14px;
+  background: #f1f5f9;
+  border: 1px solid transparent;
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  font-size: 12px;
+  font-size: 13px;
   color: #64748b;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.2s ease;
   user-select: none;
-  height: 28px;
+  height: 32px;
+  margin-bottom: -1px; /* 下移1px覆盖父级的底部边框 */
   box-sizing: border-box;
 }
 
 .tab-item:hover {
   background: #e2e8f0;
-  color: var(--el-text-color-primary);
+  color: #334155;
 }
 
 .tab-item.active {
   background: #ffffff;
-  color: var(--el-color-primary);
+  color: #0f766e;
   font-weight: 600;
-  border-color: var(--el-border-color-light);
+  border-color: #dcdfe6;
   border-bottom-color: #ffffff;
-  position: relative;
-  top: 1px;
 }
 
 .tab-close {
