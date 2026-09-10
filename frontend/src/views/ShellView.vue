@@ -242,11 +242,11 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
       </el-menu>
     </aside>
     <section class="workspace">
-      <header class="topbar">
-        <div style="display: flex; align-items: center; gap: 16px;">
+      <header class="combined-topbar">
+        <div class="topbar-left">
           <el-button class="mobile-menu-toggle" text :icon="MenuIcon" title="打开菜单" aria-label="打开菜单" @click="mobileMenuOpen=true"/>
           
-          <el-dropdown trigger="click" @command="(path: string) => router.push(path)">
+          <el-dropdown trigger="click" @command="(path: string) => router.push(path)" class="quick-entry-dropdown">
             <el-button type="primary" size="small" :icon="Plus" plain>快捷录入</el-button>
             <template #dropdown>
               <el-dropdown-menu>
@@ -259,42 +259,30 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
             </template>
           </el-dropdown>
 
-          <el-breadcrumb separator="/" style="margin-left: 8px;">
-            <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
-            <el-breadcrumb-item v-if="$route.path !== '/'">{{ getTabTitle($route.path, $route.meta?.title) }}</el-breadcrumb-item>
-          </el-breadcrumb>
-        </div>
-        <div class="topbar-user">
-          <el-tag :type="auth.user?.role === 'ADMIN' ? 'success' : 'info'">{{ auth.user ? ROLE_LABELS[auth.user.role] : "" }}</el-tag>
-          <span class="topbar-user-name">{{ auth.user?.displayName ?? "" }}</span>
-          <el-button text :icon="SwitchButton" title="退出登录" @click="leave">退出</el-button>
-        </div>
-      </header>
-
-      <!-- Multi-Tab Workspaces Bar -->
-      <nav class="tabs-nav-bar" aria-label="工作区多标签栏">
-        <div class="tabs-list">
-          <div
-            v-for="t in tabs"
-            :key="t.path"
-            class="tab-item"
-            :class="{ active: activeTab === t.path }"
-            @click="switchTab(t.path)"
-          >
-            <span class="tab-title">{{ t.title }}</span>
-            <el-icon
-              v-if="t.closable"
-              class="tab-close"
-              title="关闭标签"
-              @click.stop="removeTab(t.path)"
+          <div class="tabs-list">
+            <div
+              v-for="t in tabs"
+              :key="t.path"
+              class="tab-item"
+              :class="{ active: activeTab === t.path }"
+              @click="switchTab(t.path)"
             >
-              <Close />
-            </el-icon>
+              <span class="tab-title">{{ t.title }}</span>
+              <el-icon
+                v-if="t.closable"
+                class="tab-close"
+                title="关闭标签"
+                @click.stop="removeTab(t.path)"
+              >
+                <Close />
+              </el-icon>
+            </div>
           </div>
         </div>
-        <div class="tabs-actions">
+
+        <div class="topbar-right">
           <el-dropdown trigger="click">
-            <el-button text size="small" class="tab-more-btn">
+            <el-button text size="small" class="tab-more-btn" style="margin-right: 10px;">
               操作 <el-icon><ArrowDown /></el-icon>
             </el-button>
             <template #dropdown>
@@ -304,8 +292,14 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+
+          <div class="topbar-user">
+            <el-tag :type="auth.user?.role === 'ADMIN' ? 'success' : 'info'" size="small">{{ auth.user ? ROLE_LABELS[auth.user.role] : "" }}</el-tag>
+            <span class="topbar-user-name">{{ auth.user?.displayName ?? "" }}</span>
+            <el-button text :icon="SwitchButton" title="退出登录" @click="leave" size="small">退出</el-button>
+          </div>
         </div>
-      </nav>
+      </header>
 
       <main class="content">
         <RouterView v-slot="{ Component }">
@@ -323,16 +317,30 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
 .topbar-user-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 800px) { .topbar-user-name { display: none; } }
 
-/* TabBar 多标签页样式 */
-.tabs-nav-bar {
+/* 顶部导航与多标签合并区域 */
+.combined-topbar {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   background: #f8fafc;
   border-bottom: 1px solid #dcdfe6;
-  padding: 8px 16px 0;
-  height: 40px;
+  padding: 0 16px;
+  height: 48px;
   box-sizing: border-box;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+}
+
+.quick-entry-dropdown, .mobile-menu-toggle {
+  align-self: center;
+  margin-bottom: 2px;
 }
 
 .tabs-list {
@@ -342,8 +350,17 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
   scrollbar-width: none;
   align-items: flex-end;
   height: 100%;
+  flex: 1;
 }
 .tabs-list::-webkit-scrollbar { display: none; }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  flex-shrink: 0;
+  margin-bottom: 2px;
+}
 
 .tab-item {
   display: flex;
@@ -360,8 +377,8 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
   white-space: nowrap;
   transition: all 0.2s ease;
   user-select: none;
-  height: 32px;
-  margin-bottom: -1px; /* 下移1px覆盖父级的底部边框 */
+  height: 34px;
+  margin-bottom: -1px;
   box-sizing: border-box;
 }
 
