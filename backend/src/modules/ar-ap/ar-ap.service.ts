@@ -7,6 +7,16 @@ import type { AccountingPeriodResolver } from "../accounting-period/accounting-p
 import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
 import type { ArApActor, ArApDocumentKind, ArApPartyKind, DocumentInput, FollowUpInput, PartyInput, SettlementInput } from "./ar-ap.types.js";
 
+export interface StatementItem {
+  date: string;
+  type: string;
+  documentNo: string;
+  description: string;
+  increase: string;
+  settlement: string;
+  balance: string;
+}
+
 const ZERO = new Prisma.Decimal(0);
 
 export class ArApService {
@@ -371,16 +381,6 @@ export class ArApService {
 
     const openingBalance = priorDocTotal.minus(priorSettlementTotal);
     let runningBalance = openingBalance;
-
-    interface StatementItem {
-      date: string;
-      type: string;
-      documentNo: string;
-      description: string;
-      increase: string;
-      settlement: string;
-      balance: string;
-    }
 
     const rawItems: Array<{ date: Date; type: string; documentNo: string; description: string; increase: Prisma.Decimal; settlement: Prisma.Decimal }> = [];
     for (const doc of periodDocs) {
