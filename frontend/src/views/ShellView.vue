@@ -21,6 +21,7 @@ import {
   Notebook,
   OfficeBuilding,
   PieChart,
+  Plus,
   Setting,
   Stamp,
   SwitchButton,
@@ -242,10 +243,26 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
     </aside>
     <section class="workspace">
       <header class="topbar">
-        <div>
+        <div style="display: flex; align-items: center; gap: 16px;">
           <el-button class="mobile-menu-toggle" text :icon="MenuIcon" title="打开菜单" aria-label="打开菜单" @click="mobileMenuOpen=true"/>
-          <b style="font-size: 15px; color: #152332;">企业财务系统</b>
-          <span style="background: #eef2f6; padding: 2px 8px; border-radius: 4px; font-size: 12px; color: #64748b;">中国企业会计准则</span>
+          
+          <el-dropdown trigger="click" @command="(path: string) => router.push(path)">
+            <el-button type="primary" size="small" :icon="Plus" plain>快捷录入</el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="/vouchers">手工填制凭证</el-dropdown-item>
+                <el-dropdown-item command="/invoices">进销项发票登记</el-dropdown-item>
+                <el-dropdown-item command="/bank">银行流水导入</el-dropdown-item>
+                <el-dropdown-item command="/ar-ap" divided>应收应付往来单据</el-dropdown-item>
+                <el-dropdown-item command="/reimbursements">员工费用报销</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+
+          <el-breadcrumb separator="/" style="margin-left: 8px;">
+            <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
+            <el-breadcrumb-item v-if="$route.path !== '/'">{{ getTabTitle($route.path, $route.meta?.title) }}</el-breadcrumb-item>
+          </el-breadcrumb>
         </div>
         <div class="topbar-user">
           <el-tag :type="auth.user?.role === 'ADMIN' ? 'success' : 'info'">{{ auth.user ? ROLE_LABELS[auth.user.role] : "" }}</el-tag>
