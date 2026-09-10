@@ -245,19 +245,6 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
       <header class="combined-topbar">
         <div class="topbar-left">
           <el-button class="mobile-menu-toggle" text :icon="MenuIcon" title="打开菜单" aria-label="打开菜单" @click="mobileMenuOpen=true"/>
-          
-          <el-dropdown trigger="click" @command="(path: string) => router.push(path)" class="quick-entry-dropdown">
-            <el-button type="primary" size="small" :icon="Plus" plain>快捷录入</el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="/vouchers">手工填制凭证</el-dropdown-item>
-                <el-dropdown-item command="/invoices">进销项发票登记</el-dropdown-item>
-                <el-dropdown-item command="/bank">银行流水导入</el-dropdown-item>
-                <el-dropdown-item command="/ar-ap" divided>应收应付往来单据</el-dropdown-item>
-                <el-dropdown-item command="/reimbursements">员工费用报销</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
 
           <div class="tabs-list">
             <div
@@ -281,18 +268,6 @@ onMounted(() => { desktopMenuCollapsed.value = localStorage.getItem(sidebarColla
         </div>
 
         <div class="topbar-right">
-          <el-dropdown trigger="click">
-            <el-button text size="small" class="tab-more-btn" style="margin-right: 10px;">
-              操作 <el-icon><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="closeOtherTabs">关闭其他标签</el-dropdown-item>
-                <el-dropdown-item @click="closeAllTabs">关闭所有标签</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-
           <div class="topbar-user">
             <el-tag :type="auth.user?.role === 'ADMIN' ? 'success' : 'info'" size="small">{{ auth.user ? ROLE_LABELS[auth.user.role] : "" }}</el-tag>
             <span class="topbar-user-name">{{ auth.user?.displayName ?? "" }}</span>
