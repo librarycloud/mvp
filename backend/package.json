@@ -46,7 +46,7 @@
     "prisma": "^7.9.1",
     "tsx": "^4.23.1",
     "typescript": "^5.9.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "exceljs": {
