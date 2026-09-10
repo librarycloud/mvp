@@ -6,18 +6,375 @@ import type { AccountingPeriodResolver } from "../accounting-period/accounting-p
 import { getNextVoucherNumber } from "../voucher/voucher-numbering.helper.js";
 import { calculateMonthlyDepreciation } from "./depreciation-calculator.js";
 import type { DepreciationAccounts, DepreciationActor } from "./depreciation.types.js";
-const ZERO=new Prisma.Decimal(0);type Tx=Prisma.TransactionClient;type PostingAccounts=DepreciationAccounts&{accumulatedDepreciationAccountId:number};
-export class DepreciationService{
-  constructor(private readonly prisma:PrismaClient,private readonly periods:AccountingPeriodResolver){}
-  list(periodId?: number){return this.prisma.depreciationRecord.findMany({where:{deletedAt:null,...(periodId?{periodId}:{})},include:{asset:true,period:true,voucher:true},orderBy:[{period:{year:"desc"}},{period:{month:"desc"}},{asset:{assetNo:"asc"}}]});}
-  async summary(periodId: number){const rows=await this.list(periodId);const amount=rows.filter(x=>x.status===POSTING_STATUS.POSTED).reduce((sum,x)=>sum.plus(x.amount),ZERO);return{periodId,assetCount:rows.filter(x=>x.status===POSTING_STATUS.POSTED).length,amount};}
-  async accrue(periodId: number,accounts:DepreciationAccounts,actor:DepreciationActor){this.admin(actor);await this.periods.assertVoucherOperation(periodId);return this.prisma.$transaction(async tx=>{const period=await tx.accountingPeriod.findUnique({where:{id:periodId}});if(!period)throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND","会计期间不存在",404);const assets=await tx.fixedAsset.findMany({where:{deletedAt:null,startUseDate:{lt:period.startDate},OR:[{status:FIXED_ASSET_STATUS.ACTIVE},{status:{in:[FIXED_ASSET_STATUS.SOLD,FIXED_ASSET_STATUS.DISCARDED]},disposals:{some:{deletedAt:null,disposalDate:{gte:period.startDate,lte:period.endDate}}}}]},orderBy:{assetNo:"asc"}});const pending=[];let skipped=0;for(const asset of assets){const exists=await tx.depreciationRecord.findUnique({where:{assetId_periodId:{assetId:asset.id,periodId}}});if(exists){skipped++;continue;}const amount=this.amount(asset,period);if(amount.lessThanOrEqualTo(0)){skipped++;continue;}pending.push({asset,amount});}if(!pending.length)return{generated:[],skipped,totalAssets:assets.length};const accumulatedDepreciationAccountId=await this.accounts(tx,accounts,pending.map(({asset})=>asset.depreciationExpenseAccountId));const postingAccounts={...accounts,accumulatedDepreciationAccountId};const generated=[];for(const{asset,amount}of pending)generated.push(await this.post(tx,asset,period,amount,postingAccounts,actor));return{generated,skipped,totalAssets:assets.length};});}
-  async cancel(id: number,reason:string,actor:DepreciationActor){this.admin(actor);if(!reason.trim())throw new AppError("VOID_REASON_REQUIRED","撤销折旧必须填写原因",400);const record=await this.prisma.depreciationRecord.findFirst({where:{id,deletedAt:null},include:{asset:true}});if(!record)throw new AppError("DEPRECIATION_NOT_FOUND","折旧记录不存在",404);await this.periods.assertVoucherOperation(record.periodId);if(record.status!==POSTING_STATUS.POSTED||!record.voucherId)throw new AppError("DEPRECIATION_NOT_POSTED","折旧记录不是已计提状态",409);return this.prisma.$transaction(async tx=>{await tx.voucher.update({where:{id:record.voucherId!},data:{status:VOUCHER_STATUS.VOID,voidById:actor.actorId,voidAt:new Date(),voidReason:reason.trim()}});const accumulated=Prisma.Decimal.max(ZERO,record.asset.accumulatedDepreciation.minus(record.amount));await tx.fixedAsset.update({where:{id:record.assetId},data:{accumulatedDepreciation:accumulated,netValue:record.asset.originalValue.minus(accumulated)}});const result=await tx.depreciationRecord.update({where:{id},data:{status:VOUCHER_STATUS.VOID}});await this.audit(tx,actor.actorId,"UPDATE",id,{from:POSTING_STATUS.POSTED,to:POSTING_STATUS.VOID,reason:reason.trim()});return result;});}
-  async reaccrue(id: number,accounts:DepreciationAccounts,actor:DepreciationActor){this.admin(actor);const record=await this.prisma.depreciationRecord.findFirst({where:{id,deletedAt:null},include:{asset:true,period:true}});if(!record)throw new AppError("DEPRECIATION_NOT_FOUND","折旧记录不存在",404);await this.periods.assertVoucherOperation(record.periodId);if(record.status!==POSTING_STATUS.VOID)throw new AppError("DEPRECIATION_NOT_VOID","只有已撤销折旧可以重新计提",409);return this.prisma.$transaction(async tx=>{const accumulatedDepreciationAccountId=await this.accounts(tx,accounts,[record.asset.depreciationExpenseAccountId]);const amount=this.amount(record.asset,record.period);if(amount.lessThanOrEqualTo(0))throw new AppError("ASSET_FULLY_DEPRECIATED","固定资产已提足折旧",409);return this.post(tx,record.asset,record.period,amount,{...accounts,accumulatedDepreciationAccountId},actor,record.id);});}
-  private async post(tx:Tx,asset:any,period:any,amount:Prisma.Decimal,accounts:PostingAccounts,actor:DepreciationActor,recordId?: number){const summary=`计提${period.periodCode}折旧：${asset.assetNo} ${asset.name}`;const sequence=await getNextVoucherNumber(tx,period.year);const expenseAccountId=asset.depreciationExpenseAccountId??accounts.expenseAccountId;if(!expenseAccountId)throw new AppError("DEPRECIATION_EXPENSE_ACCOUNT_REQUIRED","存在未配置专属折旧费用科目的资产，请选择默认折旧费用科目",400);const voucher=await tx.voucher.create({data:{...sequence,fiscalYear:period.year,fiscalPeriod:period.month,voucherDate:period.endDate,postingDate:period.endDate,periodId:period.id,summary,sourceType:"MANUAL",category:"ACCRUAL",status:VOUCHER_STATUS.POSTED,totalDebit:amount,totalCredit:amount,createdById:actor.actorId,reviewerId:actor.actorId,reviewedAt:new Date(),postedById:actor.actorId,postedAt:new Date(),entries:{create:[{lineNo:1,accountId:expenseAccountId,summary,debitAmount:amount,creditAmount:ZERO},{lineNo:2,accountId:accounts.accumulatedDepreciationAccountId,summary,debitAmount:ZERO,creditAmount:amount}]}}});const event=await tx.accountingEvent.create({data:{eventType:"DEPRECIATION",sourceType:"FixedAsset",sourceId:asset.id,voucherId:voucher.id,description:summary,createdById:actor.actorId}});const accumulated=asset.accumulatedDepreciation.plus(amount);await tx.fixedAsset.update({where:{id:asset.id},data:{accumulatedDepreciation:accumulated,netValue:asset.originalValue.minus(accumulated)}});const record=recordId?await tx.depreciationRecord.update({where:{id:recordId},data:{amount,status:VOUCHER_STATUS.POSTED,eventId:event.id,voucherId:voucher.id,createdById:actor.actorId}}):await tx.depreciationRecord.create({data:{assetId:asset.id,periodId:period.id,amount,eventId:event.id,voucherId:voucher.id,createdById:actor.actorId}});await this.audit(tx,actor.actorId,recordId?"UPDATE":"CREATE",record.id,{status:VOUCHER_STATUS.POSTED,amount:amount.toString(),voucherId:voucher.id,expenseAccountId,accumulatedDepreciationAccountId:accounts.accumulatedDepreciationAccountId});return record;}
-  private amount(asset:any,period?:any){return calculateMonthlyDepreciation(asset,period??{startDate:new Date()});}
-  private async accounts(tx:Tx,input:DepreciationAccounts,assetExpenseAccountIds:Array<number|null>){if(!input.expenseAccountId&&assetExpenseAccountIds.some(id=>id===null))throw new AppError("DEPRECIATION_EXPENSE_ACCOUNT_REQUIRED","存在未配置专属折旧费用科目的资产，请选择默认折旧费用科目",400);const accumulated=await tx.account.findUnique({where:{code:"1602"},select:{id:true,deletedAt:true,isEnabled:true,isLeaf:true}});if(!accumulated||accumulated.deletedAt||!accumulated.isEnabled||!accumulated.isLeaf)throw new AppError("ACCUMULATED_DEPRECIATION_ACCOUNT_UNAVAILABLE","1602 累计折旧科目不存在、未启用或不是末级科目",409);if(input.accumulatedDepreciationAccountId!==accumulated.id)throw new AppError("INVALID_ACCUMULATED_DEPRECIATION_ACCOUNT","累计折旧科目只能选择1602累计折旧",400);const expenseAccountIds=[...new Set([...(input.expenseAccountId?[input.expenseAccountId]:[]),...assetExpenseAccountIds.filter((id):id is number=>id!==null)])];if(expenseAccountIds.includes(accumulated.id))throw new AppError("INVALID_DEPRECIATION_ACCOUNTS","折旧费用科目不能使用1602累计折旧",400);if(expenseAccountIds.length){const count=await tx.account.count({where:{id:{in:expenseAccountIds},deletedAt:null,isEnabled:true,isLeaf:true}});if(count!==expenseAccountIds.length)throw new AppError("ACCOUNT_NOT_POSTABLE","折旧费用科目不存在、未启用或不是末级科目",400);}return accumulated.id;}
-  private admin(actor:DepreciationActor){if(canManageAccounting(actor.role))return;throw new AppError("FORBIDDEN","仅财务主管可以计提或撤销折旧",403);}
-  private audit(tx:Tx,actorId: number,action:"CREATE"|"UPDATE",resourceId: number,afterData:object){return tx.auditLog.create({data:{actorId,action,resourceType:"DepreciationRecord",resourceId,beforeData:Prisma.JsonNull,afterData}});}
-}
 
+const ZERO = new Prisma.Decimal(0);
+type Tx = Prisma.TransactionClient;
+type PostingAccounts = DepreciationAccounts & { accumulatedDepreciationAccountId: number };
+
+export class DepreciationService {
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly periods: AccountingPeriodResolver,
+  ) {}
+
+  list(periodId?: number) {
+    return this.prisma.depreciationRecord.findMany({
+      where: {
+        deletedAt: null,
+        ...(periodId ? { periodId } : {}),
+      },
+      include: { asset: true, period: true, voucher: true },
+      orderBy: [{ period: { year: "desc" } }, { period: { month: "desc" } }, { asset: { assetNo: "asc" } }],
+    });
+  }
+
+  async summary(periodId: number) {
+    const rows = await this.list(periodId);
+    const posted = rows.filter((x) => x.status === POSTING_STATUS.POSTED);
+    const amount = posted.reduce((sum, x) => sum.plus(x.amount), ZERO);
+    return { periodId, assetCount: posted.length, amount };
+  }
+
+  async accrue(periodId: number, accounts: DepreciationAccounts, actor: DepreciationActor) {
+    this.admin(actor);
+    await this.periods.assertVoucherOperation(periodId);
+
+    return this.prisma.$transaction(async (tx) => {
+      const period = await tx.accountingPeriod.findUnique({ where: { id: periodId } });
+      if (!period) throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND", "会计期间不存在", 404);
+
+      const assets = await tx.fixedAsset.findMany({
+        where: {
+          deletedAt: null,
+          startUseDate: { lt: period.startDate },
+          OR: [
+            { status: FIXED_ASSET_STATUS.ACTIVE },
+            {
+              status: { in: [FIXED_ASSET_STATUS.SOLD, FIXED_ASSET_STATUS.DISCARDED] },
+              disposals: {
+                some: {
+                  deletedAt: null,
+                  disposalDate: { gte: period.startDate, lte: period.endDate },
+                },
+              },
+            },
+          ],
+        },
+        orderBy: { assetNo: "asc" },
+      });
+
+      const pending: Array<{ asset: (typeof assets)[0]; amount: Prisma.Decimal }> = [];
+      let skipped = 0;
+
+      for (const asset of assets) {
+        const exists = await tx.depreciationRecord.findUnique({
+          where: { assetId_periodId: { assetId: asset.id, periodId } },
+        });
+        if (exists) { skipped++; continue; }
+
+        const amount = this.amount(asset, period);
+        if (amount.lessThanOrEqualTo(0)) { skipped++; continue; }
+
+        pending.push({ asset, amount });
+      }
+
+      if (!pending.length) return { generated: [], skipped, totalAssets: assets.length };
+
+      const accumulatedDepreciationAccountId = await this.accounts(
+        tx,
+        accounts,
+        pending.map(({ asset }) => asset.depreciationExpenseAccountId),
+      );
+      const postingAccounts: PostingAccounts = { ...accounts, accumulatedDepreciationAccountId };
+
+      const generated = [];
+      for (const { asset, amount } of pending) {
+        generated.push(await this.post(tx, asset, period, amount, postingAccounts, actor));
+      }
+
+      return { generated, skipped, totalAssets: assets.length };
+    });
+  }
+
+  async cancel(id: number, reason: string, actor: DepreciationActor) {
+    this.admin(actor);
+    if (!reason.trim()) throw new AppError("VOID_REASON_REQUIRED", "撤销折旧必须填写原因", 400);
+
+    const record = await this.prisma.depreciationRecord.findFirst({
+      where: { id, deletedAt: null },
+      include: { asset: true },
+    });
+    if (!record) throw new AppError("DEPRECIATION_NOT_FOUND", "折旧记录不存在", 404);
+
+    await this.periods.assertVoucherOperation(record.periodId);
+
+    if (record.status !== POSTING_STATUS.POSTED || !record.voucherId) {
+      throw new AppError("DEPRECIATION_NOT_POSTED", "折旧记录不是已计提状态", 409);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.voucher.update({
+        where: { id: record.voucherId! },
+        data: {
+          status: VOUCHER_STATUS.VOID,
+          voidById: actor.actorId,
+          voidAt: new Date(),
+          voidReason: reason.trim(),
+        },
+      });
+
+      const accumulated = Prisma.Decimal.max(
+        ZERO,
+        record.asset.accumulatedDepreciation.minus(record.amount),
+      );
+      await tx.fixedAsset.update({
+        where: { id: record.assetId },
+        data: {
+          accumulatedDepreciation: accumulated,
+          netValue: record.asset.originalValue.minus(accumulated),
+        },
+      });
+
+      const result = await tx.depreciationRecord.update({
+        where: { id },
+        data: { status: VOUCHER_STATUS.VOID },
+      });
+
+      await this.audit(tx, actor.actorId, "UPDATE", id, {
+        from: POSTING_STATUS.POSTED,
+        to: POSTING_STATUS.VOID,
+        reason: reason.trim(),
+      });
+
+      return result;
+    });
+  }
+
+  async reaccrue(id: number, accounts: DepreciationAccounts, actor: DepreciationActor) {
+    this.admin(actor);
+
+    const record = await this.prisma.depreciationRecord.findFirst({
+      where: { id, deletedAt: null },
+      include: { asset: true, period: true },
+    });
+    if (!record) throw new AppError("DEPRECIATION_NOT_FOUND", "折旧记录不存在", 404);
+
+    await this.periods.assertVoucherOperation(record.periodId);
+
+    if (record.status !== POSTING_STATUS.VOID) {
+      throw new AppError("DEPRECIATION_NOT_VOID", "只有已撤销折旧可以重新计提", 409);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const accumulatedDepreciationAccountId = await this.accounts(tx, accounts, [
+        record.asset.depreciationExpenseAccountId,
+      ]);
+      const amount = this.amount(record.asset, record.period);
+      if (amount.lessThanOrEqualTo(0)) {
+        throw new AppError("ASSET_FULLY_DEPRECIATED", "固定资产已提足折旧", 409);
+      }
+      return this.post(
+        tx,
+        record.asset,
+        record.period,
+        amount,
+        { ...accounts, accumulatedDepreciationAccountId },
+        actor,
+        record.id,
+      );
+    });
+  }
+
+  private async post(
+    tx: Tx,
+    asset: any,
+    period: any,
+    amount: Prisma.Decimal,
+    accounts: PostingAccounts,
+    actor: DepreciationActor,
+    recordId?: number,
+  ) {
+    const summary = `计提${period.periodCode}折旧：${asset.assetNo} ${asset.name}`;
+    const sequence = await getNextVoucherNumber(tx, period.year);
+
+    const expenseAccountId = asset.depreciationExpenseAccountId ?? accounts.expenseAccountId;
+    if (!expenseAccountId) {
+      throw new AppError(
+        "DEPRECIATION_EXPENSE_ACCOUNT_REQUIRED",
+        "存在未配置专属折旧费用科目的资产，请选择默认折旧费用科目",
+        400,
+      );
+    }
+
+    const voucher = await tx.voucher.create({
+      data: {
+        ...sequence,
+        fiscalYear: period.year,
+        fiscalPeriod: period.month,
+        voucherDate: period.endDate,
+        postingDate: period.endDate,
+        periodId: period.id,
+        summary,
+        sourceType: "MANUAL",
+        category: "ACCRUAL",
+        status: VOUCHER_STATUS.POSTED,
+        totalDebit: amount,
+        totalCredit: amount,
+        createdById: actor.actorId,
+        reviewerId: actor.actorId,
+        reviewedAt: new Date(),
+        postedById: actor.actorId,
+        postedAt: new Date(),
+        entries: {
+          create: [
+            {
+              lineNo: 1,
+              accountId: expenseAccountId,
+              summary,
+              debitAmount: amount,
+              creditAmount: ZERO,
+            },
+            {
+              lineNo: 2,
+              accountId: accounts.accumulatedDepreciationAccountId,
+              summary,
+              debitAmount: ZERO,
+              creditAmount: amount,
+            },
+          ],
+        },
+      },
+    });
+
+    const event = await tx.accountingEvent.create({
+      data: {
+        eventType: "DEPRECIATION",
+        sourceType: "FixedAsset",
+        sourceId: asset.id,
+        voucherId: voucher.id,
+        description: summary,
+        createdById: actor.actorId,
+      },
+    });
+
+    const accumulated = asset.accumulatedDepreciation.plus(amount);
+    await tx.fixedAsset.update({
+      where: { id: asset.id },
+      data: {
+        accumulatedDepreciation: accumulated,
+        netValue: asset.originalValue.minus(accumulated),
+      },
+    });
+
+    const record = recordId
+      ? await tx.depreciationRecord.update({
+          where: { id: recordId },
+          data: {
+            amount,
+            status: VOUCHER_STATUS.POSTED,
+            eventId: event.id,
+            voucherId: voucher.id,
+            createdById: actor.actorId,
+          },
+        })
+      : await tx.depreciationRecord.create({
+          data: {
+            assetId: asset.id,
+            periodId: period.id,
+            amount,
+            eventId: event.id,
+            voucherId: voucher.id,
+            createdById: actor.actorId,
+          },
+        });
+
+    await this.audit(tx, actor.actorId, recordId ? "UPDATE" : "CREATE", record.id, {
+      status: VOUCHER_STATUS.POSTED,
+      amount: amount.toString(),
+      voucherId: voucher.id,
+      expenseAccountId,
+      accumulatedDepreciationAccountId: accounts.accumulatedDepreciationAccountId,
+    });
+
+    return record;
+  }
+
+  private amount(asset: any, period?: any) {
+    return calculateMonthlyDepreciation(asset, period ?? { startDate: new Date() });
+  }
+
+  private async accounts(tx: Tx, input: DepreciationAccounts, assetExpenseAccountIds: Array<number | null>) {
+    if (!input.expenseAccountId && assetExpenseAccountIds.some((id) => id === null)) {
+      throw new AppError(
+        "DEPRECIATION_EXPENSE_ACCOUNT_REQUIRED",
+        "存在未配置专属折旧费用科目的资产，请选择默认折旧费用科目",
+        400,
+      );
+    }
+
+    const accumulated = await tx.account.findUnique({
+      where: { code: "1602" },
+      select: { id: true, deletedAt: true, isEnabled: true, isLeaf: true },
+    });
+    if (!accumulated || accumulated.deletedAt || !accumulated.isEnabled || !accumulated.isLeaf) {
+      throw new AppError(
+        "ACCUMULATED_DEPRECIATION_ACCOUNT_UNAVAILABLE",
+        "1602 累计折旧科目不存在、未启用或不是末级科目",
+        409,
+      );
+    }
+    if (input.accumulatedDepreciationAccountId !== accumulated.id) {
+      throw new AppError(
+        "INVALID_ACCUMULATED_DEPRECIATION_ACCOUNT",
+        "累计折旧科目只能选择1602累计折旧",
+        400,
+      );
+    }
+
+    const expenseAccountIds = [
+      ...new Set([
+        ...(input.expenseAccountId ? [input.expenseAccountId] : []),
+        ...assetExpenseAccountIds.filter((id): id is number => id !== null),
+      ]),
+    ];
+
+    if (expenseAccountIds.includes(accumulated.id)) {
+      throw new AppError("INVALID_DEPRECIATION_ACCOUNTS", "折旧费用科目不能使用1602累计折旧", 400);
+    }
+
+    if (expenseAccountIds.length) {
+      const count = await tx.account.count({
+        where: { id: { in: expenseAccountIds }, deletedAt: null, isEnabled: true, isLeaf: true },
+      });
+      if (count !== expenseAccountIds.length) {
+        throw new AppError("ACCOUNT_NOT_POSTABLE", "折旧费用科目不存在、未启用或不是末级科目", 400);
+      }
+    }
+
+    return accumulated.id;
+  }
+
+  private admin(actor: DepreciationActor) {
+    if (canManageAccounting(actor.role)) return;
+    throw new AppError("FORBIDDEN", "仅财务主管可以计提或撤销折旧", 403);
+  }
+
+  private audit(
+    tx: Tx,
+    actorId: number,
+    action: "CREATE" | "UPDATE",
+    resourceId: number,
+    afterData: object,
+  ) {
+    return tx.auditLog.create({
+      data: {
+        actorId,
+        action,
+        resourceType: "DepreciationRecord",
+        resourceId,
+        beforeData: Prisma.JsonNull,
+        afterData,
+      },
+    });
+  }
+}

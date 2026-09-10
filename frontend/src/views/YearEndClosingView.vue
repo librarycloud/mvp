@@ -43,8 +43,8 @@ async function loadPeriods() {
     } else if (list.length) {
       selectedPeriodId.value = list[0].id;
     }
-  } catch {
-    // ignore
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.error?.message ?? err?.message ?? "加载会计期间失败，请刷新重试");
   }
 }
 

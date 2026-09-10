@@ -235,6 +235,9 @@ export class BankTransactionService {
     summary?: string,
     actor?: { actorId: number; role: string },
   ) {
+    if (!actor?.actorId) {
+      throw new AppError("FORBIDDEN", "生成凭证需要有效的操作人身份，请重新登录", 403);
+    }
     const prisma = this.database();
     return prisma.$transaction(async (tx) => {
       const transaction = await tx.bankTransaction.findFirst({
@@ -308,10 +311,17 @@ export class BankTransactionService {
 
       let resolvedPeriodId = period?.id;
       if (!resolvedPeriodId) {
-        const p = await tx.accountingPeriod?.findFirst?.({
+        const p = await tx.accountingPeriod.findFirst({
           where: { year: fiscalYear, month: fiscalPeriod, deletedAt: null },
         });
-        resolvedPeriodId = p?.id ?? 1;
+        if (!p) {
+          throw new AppError(
+            "ACCOUNTING_PERIOD_NOT_FOUND",
+            `流水日期 ${postingDate.toISOString().slice(0, 10)} 所在会计期间（${fiscalYear}年${fiscalPeriod}月）不存在，请先在"会计期间"中创建并开放该期间`,
+            400,
+          );
+        }
+        resolvedPeriodId = p.id;
       }
 
       const sequence = await getNextVoucherNumber(tx, fiscalYear);
@@ -330,10 +340,10 @@ export class BankTransactionService {
           status: VOUCHER_STATUS.POSTED,
           totalDebit: absAmount,
           totalCredit: absAmount,
-          createdById: actor?.actorId ?? 1,
-          reviewerId: actor?.actorId ?? 1,
+          createdById: actor.actorId,
+          reviewerId: actor.actorId,
           reviewedAt: new Date(),
-          postedById: actor?.actorId ?? 1,
+          postedById: actor.actorId,
           postedAt: new Date(),
           entries: { create: entries },
         },
@@ -358,7 +368,7 @@ export class BankTransactionService {
           sourceId: transactionId,
           voucherId: voucher.id,
           description: `银行流水【${transaction.transactionNo}】自动生成记账凭证【${voucher.voucherNo}】`,
-          createdById: actor?.actorId ?? 1,
+          createdById: actor.actorId,
         },
       });
 

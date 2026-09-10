@@ -30,7 +30,7 @@ async function loadAgingMatrix() {
     const endpoint = mode.value === "receivable" ? "receivables" : "payables";
     agingMatrix.value = await api.get(`/ar-ap/${endpoint}/aging-matrix`);
   } catch (err: any) {
-    console.error("Load aging matrix failed", err);
+    ElMessage.error(err?.response?.data?.error?.message ?? err?.message ?? "账龄矩阵加载失败");
   } finally {
     matrixLoading.value = false;
   }

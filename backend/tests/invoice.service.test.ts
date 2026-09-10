@@ -125,6 +125,9 @@ describe("InvoiceService", () => {
     const tx = {
       $executeRaw: async () => 1,
       $queryRaw: async () => [{ next_value: 1 }],
+      accountingPeriod: {
+        findFirst: async () => ({ id: 7, year: 2026, month: 7 }),
+      },
       voucherSequence: { update: async () => {} },
       invoice: {
         findFirst: async () => ({

@@ -437,10 +437,17 @@ export class InvoiceService {
 
       let resolvedPeriodId = period?.id;
       if (!resolvedPeriodId) {
-        const p = await tx.accountingPeriod?.findFirst?.({
+        const p = await tx.accountingPeriod.findFirst({
           where: { year: fiscalYear, month: fiscalPeriod, deletedAt: null },
         });
-        resolvedPeriodId = p?.id ?? 1;
+        if (!p) {
+          throw new AppError(
+            "ACCOUNTING_PERIOD_NOT_FOUND",
+            `发票日期 ${postingDate.toISOString().slice(0, 10)} 所在会计期间（${fiscalYear}年${fiscalPeriod}月）不存在，请先在"会计期间"中创建并开放该期间`,
+            400,
+          );
+        }
+        resolvedPeriodId = p.id;
       }
 
       const total = invoice.totalTaxIncludedAmount;

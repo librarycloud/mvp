@@ -97,6 +97,9 @@ describe("BankTransactionService", () => {
     const tx = {
       $executeRaw: async () => 1,
       $queryRaw: async () => [{ next_value: 2 }],
+      accountingPeriod: {
+        findFirst: async () => ({ id: 7, year: 2026, month: 7 }),
+      },
       voucherSequence: { update: async () => {} },
       bankTransaction: {
         findFirst: async () => ({

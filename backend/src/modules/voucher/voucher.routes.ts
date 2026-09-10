@@ -24,6 +24,15 @@ async function authenticate(request: FastifyRequest): Promise<void> {
   if (request.user.type !== "access") throw unauthorized("请使用访问令牌");
 }
 
+async function cashierGuard(request: FastifyRequest): Promise<void> {
+  await request.jwtVerify();
+  if (request.user.type !== "access") throw unauthorized("请使用访问令牌");
+  const allowed = ["ADMIN", "FINANCE_MANAGER", "CASHIER"];
+  if (!allowed.includes(request.user.role)) {
+    throw unauthorized("出纳日记账仅限出纳、财务主管或管理员查阅");
+  }
+}
+
 export async function voucherRoutes(app: FastifyInstance, options: { controller: VoucherController }) {
   app.post("/", {
     preHandler: authenticate,
@@ -128,7 +137,7 @@ export async function voucherRoutes(app: FastifyInstance, options: { controller:
     handler: options.controller.cashierSign,
   });
   app.get("/cashier-journal", {
-    preHandler: authenticate,
+    preHandler: cashierGuard,
     schema: {
       tags: ["账簿"],
       summary: "出纳日记账查询",

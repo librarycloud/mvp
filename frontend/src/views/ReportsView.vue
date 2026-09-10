@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
 import { api } from "../utils/api";
 
 const router = useRouter();
@@ -91,8 +92,8 @@ async function handleLineClick(row: any) {
     if (reportId && itemId) {
       drillDownData.value = await api.get(`/reports/${reportId}/drill-down/${itemId}`);
     }
-  } catch (err) {
-    console.error("Drill down load failed", err);
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.error?.message ?? err?.message ?? "钻取明细加载失败");
   } finally {
     drillDownLoading.value = false;
   }
