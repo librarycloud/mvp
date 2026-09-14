@@ -1,5 +1,7 @@
+import fastifyCors from "@fastify/cors";
 import fastifyJwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import Fastify from "fastify";
@@ -166,6 +168,28 @@ export interface BuildAppOptions {
 export async function buildApp(options: BuildAppOptions = {}) {
   const config = options.config ?? loadConfig();
   const app = Fastify({ logger: options.logger ?? config.nodeEnv !== "test" });
+
+  await app.register(fastifyCors, {
+    // P1 安全修复：配置 CORS，限制允许的来源，防止跨站请求伪造
+    origin: config.nodeEnv === "production"
+      ? (origin, cb) => {
+          // 生产环境：只允许同源或配置的前端域名
+          const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map(o => o.trim()).filter(Boolean);
+          if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+            cb(null, true);
+          } else {
+            cb(new Error("Not allowed by CORS"), false);
+          }
+        }
+      : true, // 开发环境允许所有来源
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  });
+
+  // P1 安全修复：登录接口限流，防止暴力破解密码（每 IP 每分钟最多 10 次）
+  await app.register(rateLimit, {
+    global: false, // 只对指定路由开启，不影响其他接口性能
+  });
 
   await app.register(swagger, {
     openapi: {

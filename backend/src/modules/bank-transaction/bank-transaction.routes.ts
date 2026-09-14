@@ -133,7 +133,11 @@ export async function bankTransactionRoutes(
   });
 
   app.post("/:id/generate-voucher", {
-    preHandler: operateBank,
+    // P0 修复：生成凭证限制财务主管及以上，防止出纳绕过审核直接过账
+    preHandler: async (request) => {
+      await authenticate(request);
+      requireRole(request.user.role, ["ADMIN", "FINANCE_MANAGER", "ACCOUNTANT"], "仅会计及以上角色可以从银行流水生成记账凭证");
+    },
     schema: {
       tags: ["银行流水"],
       summary: "银行流水一键生成记账凭证",

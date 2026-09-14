@@ -108,7 +108,9 @@ async function loadAccounts() {
   try {
     const res = await api.get<AccountOption[]>("/accounts?tree=false&isEnabled=true");
     accounts.value = res.filter((a) => a.isLeaf && a.isEnabled);
-  } catch { /* ignored */ }
+  } catch {
+    ElMessage.warning("加载银行账户列表失败，请刷新重试");
+  }
 }
 
 function resetFilters() {
@@ -156,8 +158,8 @@ async function submitQuickVoucher() {
     ElMessage.success(`记账凭证【${res.voucherNo}】已自动生成并入账！`);
     quickVoucherVisible.value = false;
     await load();
-  } catch (err: any) {
-    ElMessage.error(err?.message || "认领生单失败");
+  } catch {
+    // api client handles error toasts
   } finally {
     quickVoucherSaving.value = false;
   }
@@ -188,8 +190,8 @@ async function loadCashierJournal() {
       `/vouchers/cashier-journal?accountCode=${journalAccountCode.value}&startDate=${start}&endDate=${end}`
     );
     journalData.value = res;
-  } catch (err: any) {
-    ElMessage.error(err?.message || "获取出纳日记账失败");
+  } catch {
+    // api client handles error toasts
   } finally {
     journalLoading.value = false;
   }

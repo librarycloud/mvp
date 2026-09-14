@@ -17,6 +17,8 @@ function handleUnauthorized(hasToken: boolean) {
   unauthorizedHandler?.();
 }
 
+// 注意：此函数在请求失败时已自动调用 ElMessage.error()。
+// 调用方的 catch 块不需要再次显示错误消息，否则会导致重复提示。
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("finance_access_token");
   const headers = new Headers(init.headers);
@@ -72,5 +74,24 @@ export const api = {
   uploadMany: <T>(path: string, files: File[]) => { const form = new FormData(); for (const file of files) form.append("file", file); return request<T>(path, { method: "POST", body: form }); },
   uploadWithFields: <T>(path: string, file: File, fields: Record<string, string | number>) => { const form = new FormData(); for (const [key, value] of Object.entries(fields)) form.append(key, String(value)); form.append("file", file); return request<T>(path, { method: "POST", body: form }); },
   blob: async (path: string) => { const token = localStorage.getItem("finance_access_token"); const response = await fetch(`${baseUrl}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} }); if (response.status === 401) { handleUnauthorized(Boolean(token)); throw new Error("登录已失效，请重新登录"); } if (!response.ok) { const body = await response.json().catch(() => null) as ApiEnvelope<unknown> | null; const message = body?.error?.message ?? "读取文件失败"; ElMessage.error(message); throw new Error(message); } unauthorizedHandled = false; return response.blob(); },
-  download: async (path: string, fileName: string) => { const token = localStorage.getItem("finance_access_token"); const response = await fetch(`${baseUrl}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} }); if (response.status === 401) { handleUnauthorized(Boolean(token)); throw new Error("登录已失效，请重新登录"); } if (!response.ok) throw new Error("下载失败"); unauthorizedHandled = false; const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a"); link.href = url; link.download = fileName; link.click(); URL.revokeObjectURL(url); },
+  // P1 修复 #19：download 在失败时现在会显示 ElMessage.error，之前只是静默抛出 Error
+  download: async (path: string, fileName: string) => {
+    const token = localStorage.getItem("finance_access_token");
+    const response = await fetch(`${baseUrl}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (response.status === 401) { handleUnauthorized(Boolean(token)); throw new Error("登录已失效，请重新登录"); }
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as ApiEnvelope<unknown> | null;
+      const message = body?.error?.message ?? "下载失败";
+      ElMessage.error(message);
+      throw new Error(message);
+    }
+    unauthorizedHandled = false;
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+  },
 };
+

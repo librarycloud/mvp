@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { api } from "../utils/api";
 import { useClientPagination } from "../composables/useClientPagination";
 import { todayBusinessDate } from "../utils/date";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 const STATUS = { ACTIVE: 0, INACTIVE: 1, DISCARDED: 2, SOLD: 3 } as const;
 const labels: Record<number, string> = { 0: "启用", 1: "停用", 2: "报废", 3: "出售" };
 const postingLabels: Record<number, string> = { 2: "已记账", 3: "作废" };
@@ -30,7 +30,18 @@ async function save() { const payload = { ...form.value, depreciationExpenseAcco
 async function changeStatus(row: any, value: string | number | object) { await api.post(`/fixed-assets/${row.id}/status`, { status: Number(value) }); await load(); }
 async function show(row: any) { detail.value = await api.get(`/fixed-assets/${row.id}`); attachments.value = await api.get<any[]>(`/attachments/source/FixedAsset/${detail.value.id}`); detailDialog.value = true; }
 function openDisposal(row: any) { detail.value = row; disposalForm.value = { disposalType: "DISCARD", disposalDate: new Date().toISOString().slice(0, 10), proceeds: "0", proceedsAccountId: accounts.value.find((x) => x.code === "1002")?.id, gainLossAccountId: accounts.value.find((x) => x.code === "6115")?.id, reason: "" }; disposalDialog.value = true; }
-async function dispose() { if (!detail.value) return; await api.post(`/fixed-assets/${detail.value.id}/disposal`, disposalForm.value); disposalDialog.value = false; detail.value = await api.get(`/fixed-assets/${detail.value.id}`); await load(); }
+async function dispose() {
+  if (!detail.value) return;
+  try {
+    await ElMessageBox.confirm(`确认要${disposalForm.value.disposalType === 'SALE' ? '出售' : '报废'}该资产吗？此操作不可撤销，将生成处置凭证并核销资产。`, '确认处置', { type: 'warning', confirmButtonText: '确认处置', cancelButtonText: '取消' });
+  } catch {
+    return;
+  }
+  await api.post(`/fixed-assets/${detail.value.id}/disposal`, disposalForm.value);
+  disposalDialog.value = false;
+  detail.value = await api.get(`/fixed-assets/${detail.value.id}`);
+  await load();
+}
 async function upload(event: Event) { const file = (event.target as HTMLInputElement).files?.[0]; if (!file || !detail.value) return; await api.upload(`/attachments/upload?sourceType=FixedAsset&sourceId=${detail.value.id}&relationType=OTHER`, file); attachments.value = await api.get<any[]>(`/attachments/source/FixedAsset/${detail.value.id}`); }
 
 // 长期待摊费用
@@ -116,8 +127,8 @@ async function executeAmortize() {
     ElMessage.success(`长期待摊费用按月摊销完成：共计提 ${res.generatedCount} 笔凭证`);
     amortizeDialog.value = false;
     await loadDeferred();
-  } catch (err: any) {
-    ElMessage.error(err?.message || "摊销失败");
+  } catch {
+    // api client handles error toasts
   } finally {
     amortizing.value = false;
   }

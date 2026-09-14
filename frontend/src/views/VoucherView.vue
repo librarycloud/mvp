@@ -34,6 +34,7 @@ const accounts = ref<AccountOption[]>([]);
 const dimensions = ref<any[]>([]);
 const periods = ref<any[]>([]);
 const loading = ref(false);
+const submitting = ref(false); // P0 修复 #3：防止保存按钮重复提交
 const accountsLoading = ref(false);
 const visible = ref(false);
 const detailVisible = ref(false);
@@ -372,39 +373,51 @@ function openPrint(target: any) {
 }
 
 async function save() {
+  if (submitting.value) return;
   if (!isBalanced.value) {
     ElMessage.error(`凭证借贷不平衡！当前借贷差额为：${balanceDiff.value} 元，请找平后再保存`);
     return;
   }
-  if (editingId.value) await api.put(`/vouchers/${editingId.value}`, form);
-  else await api.post("/vouchers", form);
-  ElMessage.success(editingId.value ? "凭证已修改" : "凭证已保存");
-  visible.value = false;
-  await load();
+  submitting.value = true;
+  try {
+    if (editingId.value) await api.put(`/vouchers/${editingId.value}`, form);
+    else await api.post("/vouchers", form);
+    ElMessage.success(editingId.value ? "凭证已修改" : "凭证已保存");
+    visible.value = false;
+    await load();
+  } finally {
+    submitting.value = false;
+  }
 }
 
 async function saveAndNew() {
+  if (submitting.value) return;
   if (!isBalanced.value) {
     ElMessage.error(`凭证借贷不平衡！当前借贷差额为：${balanceDiff.value} 元，请找平后再保存`);
     return;
   }
-  if (editingId.value) await api.put(`/vouchers/${editingId.value}`, form);
-  else await api.post("/vouchers", form);
-  ElMessage.success(editingId.value ? "凭证已修改，已开启下一张" : "凭证已保存，请录入下一张");
-  
-  editingId.value = "";
-  form.summary = "";
-  form.category = "TRANSFER";
-  categoryManuallySelected.value = false;
-  form.entries = [
-    { accountId: "" as number | "", summary: "", debitAmount: "0", creditAmount: "0", dimensionMemberIds: [] as number[] },
-    { accountId: "" as number | "", summary: "", debitAmount: "0", creditAmount: "0", dimensionMemberIds: [] as number[] },
-  ];
-  await load();
-  nextTick(() => {
-    const summaryInput = document.querySelector(".voucher-summary-input input") as HTMLInputElement | null;
-    summaryInput?.focus();
-  });
+  submitting.value = true;
+  try {
+    if (editingId.value) await api.put(`/vouchers/${editingId.value}`, form);
+    else await api.post("/vouchers", form);
+    ElMessage.success(editingId.value ? "凭证已修改，已开启下一张" : "凭证已保存，请录入下一张");
+    
+    editingId.value = "";
+    form.summary = "";
+    form.category = "TRANSFER";
+    categoryManuallySelected.value = false;
+    form.entries = [
+      { accountId: "" as number | "", summary: "", debitAmount: "0", creditAmount: "0", dimensionMemberIds: [] as number[] },
+      { accountId: "" as number | "", summary: "", debitAmount: "0", creditAmount: "0", dimensionMemberIds: [] as number[] },
+    ];
+    await load();
+    nextTick(() => {
+      const summaryInput = document.querySelector(".voucher-summary-input input") as HTMLInputElement | null;
+      summaryInput?.focus();
+    });
+  } finally {
+    submitting.value = false;
+  }
 }
 
 function handleGlobalKeydown(e: KeyboardEvent) {
@@ -437,8 +450,6 @@ async function handleCustomUpload(options: any) {
     ElMessage.success(result?.message || `成功批量导入 ${result?.totalImported ?? 0} 张凭证！`);
     importVisible.value = false;
     await load(true);
-  } catch (error: any) {
-    ElMessage.error(error.message || "批量导入失败");
   } finally {
     importLoading.value = false;
   }
@@ -451,7 +462,9 @@ async function transition(row: any, action: string, message: string, body?: unkn
 }
 
 async function removeDraft(row: any) {
-  await ElMessageBox.confirm("删除后将不再出现在凭证列表中，是否继续？", "删除草稿", { type: "warning" });
+  try {
+    await ElMessageBox.confirm("删除后将不再出现在凭证列表中，是否继续？", "删除草稿", { type: "warning" });
+  } catch { return; } // 用户点取消
   await api.delete(`/vouchers/${row.id}`);
   ElMessage.success("草稿已删除");
   await load();
@@ -459,7 +472,9 @@ async function removeDraft(row: any) {
 
 async function batch(action: "submit" | "review" | "post") {
   const actionLabel = action === "submit" ? "提交" : action === "review" ? "审核" : "记账";
-  await ElMessageBox.confirm(`确认对选中的 ${selectedRows.value.length} 张凭证执行批量${actionLabel}？`, `批量${actionLabel}`);
+  try {
+    await ElMessageBox.confirm(`确认对选中的 ${selectedRows.value.length} 张凭证执行批量${actionLabel}？`, `批量${actionLabel}`);
+  } catch { return; } // 用户点取消
   const result = await api.post<{ succeededIds: number[]; failures: Array<{ id: number; message: string }> }>(
     `/vouchers/batch/${action}`,
     { ids: selectedRows.value.map((row) => row.id) }
@@ -474,9 +489,12 @@ async function batch(action: "submit" | "review" | "post") {
 }
 
 async function voidVoucher(row: any) {
-  const result = await ElMessageBox.prompt("请输入作废原因", "作废凭证", {
-    inputValidator: (value) => Boolean(value.trim()) || "作废原因不能为空",
-  });
+  let result: { value: string };
+  try {
+    result = await ElMessageBox.prompt("请输入作废原因", "作废凭证", {
+      inputValidator: (value) => Boolean(value.trim()) || "作废原因不能为空",
+    });
+  } catch { return; } // 用户点取消
   await transition(row, "void", "凭证已作废", { reason: result.value });
 }
 
@@ -510,8 +528,6 @@ async function executeReorder() {
     ElMessage.success(`重排完成：共整理 ${res.totalReordered} 张凭证，修复断号 ${res.gapsFixed} 处`);
     reorderVisible.value = false;
     await load();
-  } catch (err: any) {
-    ElMessage.error(err?.message || "重排凭证断号失败");
   } finally {
     reorderLoading.value = false;
   }
@@ -528,8 +544,6 @@ async function openTemplateModal() {
   templateLoading.value = true;
   try {
     templateList.value = await api.get<any[]>("/voucher-templates");
-  } catch (err: any) {
-    ElMessage.error(err?.message || "加载常用凭证模板失败");
   } finally {
     templateLoading.value = false;
   }
@@ -565,39 +579,37 @@ async function saveAsTemplate() {
     ElMessage.warning("模板至少需包含2行已选会计科目");
     return;
   }
-  const { value: templateName } = await ElMessageBox.prompt("请输入模板名称", "存为常用模板", {
-    inputValue: form.summary,
-    inputValidator: (v) => Boolean(v?.trim()) || "模板名称不能为空",
-  });
+  let templateName: string;
+  try {
+    const res = await ElMessageBox.prompt("请输入模板名称", "存为常用模板", {
+      inputValue: form.summary,
+      inputValidator: (v) => Boolean(v?.trim()) || "模板名称不能为空",
+    });
+    templateName = res.value;
+  } catch {
+    return; // user cancelled
+  }
   if (!templateName) return;
 
-  try {
-    await api.post("/voucher-templates", {
-      name: templateName.trim(),
-      category: form.category === "PAYMENT" ? "EXPENSE" : "COMMON",
-      summary: form.summary.trim(),
-      entries: validEntries.map((e, idx) => ({
-        lineNo: idx + 1,
-        accountId: Number(e.accountId),
-        direction: Number(e.debitAmount) > 0 || (Number(e.debitAmount) === 0 && Number(e.creditAmount) === 0 && idx === 0) ? "DEBIT" : "CREDIT",
-        summary: e.summary?.trim() || form.summary.trim(),
-      })),
-    });
-    ElMessage.success("已成功存为常用凭证模板");
-  } catch (err: any) {
-    ElMessage.error(err?.message || "保存模板失败");
-  }
+  await api.post("/voucher-templates", {
+    name: templateName.trim(),
+    category: form.category === "PAYMENT" ? "EXPENSE" : "COMMON",
+    summary: form.summary.trim(),
+    entries: validEntries.map((e, idx) => ({
+      lineNo: idx + 1,
+      accountId: Number(e.accountId),
+      direction: Number(e.debitAmount) > 0 || (Number(e.debitAmount) === 0 && Number(e.creditAmount) === 0 && idx === 0) ? "DEBIT" : "CREDIT",
+      summary: e.summary?.trim() || form.summary.trim(),
+    })),
+  });
+  ElMessage.success("已成功存为常用凭证模板");
 }
 
 // 出纳签字
 async function cashierSign(row: any) {
-  try {
-    await api.post(`/vouchers/${row.id}/cashier-sign`);
-    ElMessage.success(`出纳已完成对凭证【${row.voucherNo}】的签字确认`);
-    await load();
-  } catch (err: any) {
-    ElMessage.error(err?.message || "出纳签字失败");
-  }
+  await api.post(`/vouchers/${row.id}/cashier-sign`);
+  ElMessage.success(`出纳已完成对凭证【${row.voucherNo}】的签字确认`);
+  await load();
 }
 
 function closeDetail() {
@@ -851,11 +863,11 @@ onUnmounted(() => {
       </el-form>
 
       <template #footer>
-        <el-button @click="visible = false">取消</el-button>
-        <el-button v-if="!editingId" type="success" :disabled="!isBalanced" @click="saveAndNew">
+        <el-button @click="visible = false" :disabled="submitting">取消</el-button>
+        <el-button v-if="!editingId" type="success" :disabled="!isBalanced || submitting" :loading="submitting" @click="saveAndNew">
           保存并新增 (Alt+S)
         </el-button>
-        <el-button type="primary" :disabled="!isBalanced" @click="save">
+        <el-button type="primary" :disabled="!isBalanced || submitting" :loading="submitting" @click="save">
           {{ editingId ? '保存修改' : '保存草稿' }}
         </el-button>
       </template>

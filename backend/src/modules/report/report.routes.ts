@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { requireRole } from "../../common/auth/authorization.js";
 import { unauthorized } from "../../common/errors/app-error.js";
 import type { ReportController } from "./report.controller.js";
 import { GenerateReportBodySchema, IncomeStatementPeriodSchema, ReportParamsSchema, ReportSchema } from "./dto/report.dto.js";
@@ -9,10 +10,16 @@ async function authenticate(request: FastifyRequest): Promise<void> {
   if (request.user.type !== "access") throw unauthorized("请使用访问令牌");
 }
 
+// P1 修复：财务报表涉及公司机密数据，仅财务主管及管理员可生成和导出
+async function financeManager(request: FastifyRequest): Promise<void> {
+  await authenticate(request);
+  requireRole(request.user.role, ["ADMIN", "FINANCE_MANAGER"], "仅财务主管或管理员可以生成和导出财务报表");
+}
+
 export async function reportRoutes(app: FastifyInstance, options: { controller: ReportController }) {
   app.get("/", { preHandler: authenticate, schema: { tags: ["报表"], security: [{ bearerAuth: [] }], querystring: Type.Object({ page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })), pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, default: 20 })) }) }, handler: options.controller.list });
   app.post("/generate", {
-    preHandler: authenticate,
+    preHandler: financeManager,
     schema: {
       tags: ["报表"], summary: "按模板配置生成报表",
       description: "传入已启用的模板编码；新增报表无需修改生成程序。",
@@ -22,7 +29,7 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
     handler: options.controller.generate,
   });
   app.post("/income-statement/generate", {
-    preHandler: authenticate,
+    preHandler: financeManager,
     schema: {
       tags: ["报表"], summary: "按配置生成利润表",
       description: "科目映射和公式从报表模板配置读取，不在程序中硬编码。",
@@ -32,7 +39,7 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
     handler: options.controller.generateIncomeStatement,
   });
   app.post("/balance-sheet/generate", {
-    preHandler: authenticate,
+    preHandler: financeManager,
     schema: {
       tags: ["报表"], summary: "按配置生成资产负债表",
       description: "期初和期末余额从模板的余额映射及公式依赖生成。",
@@ -42,7 +49,7 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
     handler: options.controller.generateBalanceSheet,
   });
   app.post("/cash-flow-statement/generate", {
-    preHandler: authenticate,
+    preHandler: financeManager,
     schema: {
       tags: ["报表"], summary: "按配置生成间接法现金流量表",
       description: "期间流量和期初期末现金余额均由模板映射及公式依赖生成。",
@@ -52,7 +59,7 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
     handler: options.controller.generateCashFlowStatement,
   });
   app.post("/cash-flow-indirect", {
-    preHandler: authenticate,
+    preHandler: financeManager,
     schema: {
       tags: ["报表"], summary: "生成现金流量表补充资料（间接法）",
       description: "遵循 CAS 31 准则将净利润调节为经营活动现金流量净额。",
@@ -61,7 +68,7 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
     handler: options.controller.generateCashFlowIndirect,
   });
   app.post("/equity-change-statement/generate", {
-    preHandler: authenticate,
+    preHandler: financeManager,
     schema: {
       tags: ["报表"], summary: "按配置生成所有者权益变动表",
       description: "所有者权益组成项目及变动金额由模板映射生成。",
@@ -78,8 +85,8 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
     },
     handler: options.controller.getById,
   });
-  app.get("/:id/export.xlsx", { preHandler: authenticate, schema: { tags: ["报表"], security: [{ bearerAuth: [] }], params: ReportParamsSchema }, handler: options.controller.exportExcel });
-  app.get("/:id/export.pdf", { preHandler: authenticate, schema: { tags: ["报表"], security: [{ bearerAuth: [] }], params: ReportParamsSchema }, handler: options.controller.exportPdf });
+  app.get("/:id/export.xlsx", { preHandler: financeManager, schema: { tags: ["报表"], security: [{ bearerAuth: [] }], params: ReportParamsSchema }, handler: options.controller.exportExcel });
+  app.get("/:id/export.pdf", { preHandler: financeManager, schema: { tags: ["报表"], security: [{ bearerAuth: [] }], params: ReportParamsSchema }, handler: options.controller.exportPdf });
   app.get("/:id/items/:itemId/drill-down", {
     preHandler: authenticate,
     schema: {

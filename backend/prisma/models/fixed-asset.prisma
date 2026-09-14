@@ -28,6 +28,7 @@ model FixedAsset {
   disposals                    FixedAssetDisposal[]
 
   @@index([category, status])
+  @@index([status, startUseDate, deletedAt]) // P1 修复：月度折旧计算查询（status=ACTIVE + startUseDate过滤）
   @@index([depreciationExpenseAccountId])
   @@index([deletedAt])
   @@map("fixed_assets")

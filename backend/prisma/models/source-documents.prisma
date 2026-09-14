@@ -67,6 +67,7 @@ model BankTransaction {
   @@index([transactionTime])
   @@index([transactionDate])
   @@index([voucherId])
+  @@index([voucherId, amount, deletedAt]) // P1 修复：AR/AP银行流水匹配查询（未核销+金额过滤）
   @@index([importBatchId])
   @@index([directionConfirmedById])
   @@index([deletedAt])

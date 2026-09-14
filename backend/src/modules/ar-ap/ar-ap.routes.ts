@@ -21,6 +21,7 @@ export async function arApRoutes(app: FastifyInstance, options: { controller: Ar
   app.get("/payables", { ...secure, schema: { querystring: DocumentQuery }, handler: c.listPayables }); app.post("/payables", { ...editable, schema: { body: DocumentBody }, handler: c.createPayable }); app.get("/payables/:id/bank-matches", { ...secure, schema: { params: IdParams }, handler: c.payableMatches }); app.post("/payables/:id/payments", { ...payment, schema: { params: IdParams, body: SettlementBody }, handler: c.payment }); app.post("/payables/:id/write-offs", { ...payment, schema: { params: IdParams, body: SettlementBody }, handler: c.payableWriteOff });
   app.post("/payable-settlements/:id/cancel", { ...manageable, schema: { params: IdParams, body: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 500 }) }) }, handler: c.cancelPayment });
   app.get("/follow-ups", { ...secure, schema: { querystring: FollowUpQuery }, handler: c.followUps });
-  app.post("/follow-ups", { ...secure, schema: { body: FollowUpBody }, handler: c.createFollowUp });
-  app.post("/follow-ups/:id/complete", { ...secure, schema: { params: IdParams, body: Type.Object({ result: Type.String({ maxLength: 500 }) }) }, handler: c.completeFollowUp });
+  // P1 修复：跟进任务创建和完成仅限会计及以上角色，防止出纳越权操作客户催收记录
+  app.post("/follow-ups", { ...editable, schema: { body: FollowUpBody }, handler: c.createFollowUp });
+  app.post("/follow-ups/:id/complete", { ...editable, schema: { params: IdParams, body: Type.Object({ result: Type.String({ maxLength: 500 }) }) }, handler: c.completeFollowUp });
 }

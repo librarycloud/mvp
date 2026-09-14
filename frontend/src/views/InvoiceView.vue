@@ -52,6 +52,7 @@ const linkLoading = ref(false);
 const voucherOptions = ref<any[]>([]);
 const selectedVoucherId = ref<number | "">("");
 const profile = ref<any>(null);
+const submitting = ref(false);
 const documentVisible = ref(false);
 const documentFile = ref<File | null>(null);
 const documentForm = reactive({ invoiceNumber: "", issueTime: `${todayBusinessDate()}T00:00:00.000Z`, sellerName: "", sellerIdNum: "", buyerName: "", buyerIdNum: "", totalAmountWithoutTax: "", totalTaxAmount: "", totalTaxIncludedAmount: "", invoiceType: "ORDINARY", currency: "CNY" });
@@ -166,9 +167,16 @@ function chooseDocument(event: Event) {
 function openDocument() { documentFile.value = null; Object.assign(documentForm, { invoiceNumber: "", issueTime: `${todayBusinessDate()}T00:00:00.000Z`, sellerName: "", sellerIdNum: "", buyerName: "", buyerIdNum: "", totalAmountWithoutTax: "", totalTaxAmount: "", totalTaxIncludedAmount: "", invoiceType: "ORDINARY", currency: "CNY" }); documentVisible.value = true; }
 async function importDocument() {
   if (!documentFile.value) return ElMessage.warning("请选择 OFD 或 PDF 文件");
-  const query = postingDate.value ? `?postingDate=${encodeURIComponent(postingDate.value)}` : "";
-  await api.uploadWithFields(`/invoices/import/document${query}`, documentFile.value, documentForm);
-  documentVisible.value = false; ElMessage.success("电子发票原件已归档，待人工核验"); await load(true);
+  submitting.value = true;
+  try {
+    const query = postingDate.value ? `?postingDate=${encodeURIComponent(postingDate.value)}` : "";
+    await api.uploadWithFields(`/invoices/import/document${query}`, documentFile.value, documentForm);
+    documentVisible.value = false;
+    ElMessage.success("电子发票原件已归档，待人工核验");
+    await load(true);
+  } finally {
+    submitting.value = false;
+  }
 }
 
 async function showDetail(row: any) {
@@ -200,7 +208,11 @@ async function linkVoucher() {
 }
 async function unlinkVoucher(source: any) {
   if (!detail.value) return;
-  await ElMessageBox.confirm(`确认解除与凭证 ${source.voucher.voucherNo} 的关联？`, "解除凭证关联");
+  try {
+    await ElMessageBox.confirm(`确认解除与凭证 ${source.voucher.voucherNo} 的关联？`, "解除凭证关联");
+  } catch {
+    return;
+  }
   detail.value = await api.delete<any>(`/invoices/${detail.value.id}/vouchers/${source.voucherId}`);
   ElMessage.success("凭证关联已解除");
   await load();
@@ -215,15 +227,41 @@ async function confirmDeduction(status: 1 | 2 | 3) {
   if (!detail.value || detail.value.direction !== "PURCHASE") return;
   let amount = status === 1 ? String(detail.value.totalTaxAmount) : "0";
   if (status === 3) {
-    const result = await ElMessageBox.prompt("请输入实际可抵扣税额", "部分抵扣", { inputValue: String(detail.value.deductibleTaxAmount ?? "0"), inputValidator: (value) => /^\\d{1,15}(?:\\.\\d{1,4})?$/.test(value) || "金额格式无效" });
+    let result: any;
+    try {
+      result = await ElMessageBox.prompt("请输入实际可抵扣税额", "部分抵扣", { inputValue: String(detail.value.deductibleTaxAmount ?? "0"), inputValidator: (value) => /^\d{1,15}(?:\.\d{1,4})?$/.test(value) || "金额格式无效" });
+    } catch {
+      return;
+    }
     amount = result.value;
   }
   await api.put(`/invoices/${detail.value.id}/tax-deduction`, { status, deductibleTaxAmount: amount });
   detail.value = await api.get(`/invoices/${detail.value.id}`); await load(); ElMessage.success("抵扣处理已保存");
 }
 async function verifyInvoice() { if (!detail.value) return; detail.value = await api.post(`/invoices/${detail.value.id}/verify`); await load(); ElMessage.success("人工核验结果已记录"); }
-async function voidInvoice() { if (!detail.value) return; await ElMessageBox.confirm("作废后发票不能再用于报销或入账，确认继续？", "作废发票"); detail.value = await api.post(`/invoices/${detail.value.id}/void`); await load(); ElMessage.success("发票已作废"); }
-async function linkRedLetter() { if (!detail.value) return; const result = await ElMessageBox.prompt("输入已导入红字发票的编号", "关联红字发票", { inputPattern: /^\d+$/, inputErrorMessage: "请输入发票记录编号" }); await api.post(`/invoices/${detail.value.id}/red-letter`, { redInvoiceId: Number(result.value) }); detail.value = await api.get(`/invoices/${detail.value.id}`); ElMessage.success("红字发票已关联"); }
+async function voidInvoice() {
+  if (!detail.value) return;
+  try {
+    await ElMessageBox.confirm("作废后发票不能再用于报销或入账，确认继续？", "作废发票");
+  } catch {
+    return;
+  }
+  detail.value = await api.post(`/invoices/${detail.value.id}/void`);
+  await load();
+  ElMessage.success("发票已作废");
+}
+async function linkRedLetter() {
+  if (!detail.value) return;
+  let result: any;
+  try {
+    result = await ElMessageBox.prompt("输入已导入红字发票的编号", "关联红字发票", { inputPattern: /^\d+$/, inputErrorMessage: "请输入发票记录编号" });
+  } catch {
+    return;
+  }
+  await api.post(`/invoices/${detail.value.id}/red-letter`, { redInvoiceId: Number(result.value) });
+  detail.value = await api.get(`/invoices/${detail.value.id}`);
+  ElMessage.success("红字发票已关联");
+}
 
 const generateVoucherVisible = ref(false);
 const generateLoading = ref(false);
@@ -268,8 +306,8 @@ async function executeGenerateVoucher() {
     if (detailVisible.value && detail.value?.id === targetInvoice.value.id) {
       detail.value = await api.get(`/invoices/${targetInvoice.value.id}`);
     }
-  } catch (err: any) {
-    ElMessage.error(err?.message || "生成记账凭证失败");
+  } catch {
+    // api client handles error toasts
   } finally {
     generateLoading.value = false;
   }
@@ -372,7 +410,7 @@ onMounted(async () => { await Promise.all([load(), loadProfile()]); });
     <el-dialog v-model="documentVisible" title="归档 OFD/PDF 电子发票" width="640px">
       <el-alert type="info" :closable="false">系统不会对图片执行识别或 OCR；请根据电子发票原件确认下列字段。</el-alert>
       <el-form label-width="110px" class="document-form"><el-form-item label="电子发票原件" required><input type="file" accept=".ofd,.pdf,application/pdf" @change="chooseDocument"/><span v-if="documentFile">{{documentFile.name}}</span></el-form-item><el-form-item label="发票号码" required><el-input v-model="documentForm.invoiceNumber"/></el-form-item><el-form-item label="开票时间" required><el-date-picker v-model="documentForm.issueTime" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss.SSS[Z]" style="width:100%"/></el-form-item><el-form-item label="销售方名称" required><el-input v-model="documentForm.sellerName"/></el-form-item><el-form-item label="销售方税号" required><el-input v-model="documentForm.sellerIdNum"/></el-form-item><el-form-item label="购买方名称" required><el-input v-model="documentForm.buyerName"/></el-form-item><el-form-item label="购买方税号" required><el-input v-model="documentForm.buyerIdNum"/></el-form-item><el-form-item label="发票类型"><el-select v-model="documentForm.invoiceType" style="width:100%"><el-option label="专票" value="SPECIAL"/><el-option label="普票" value="ORDINARY"/></el-select></el-form-item><el-form-item label="不含税金额" required><el-input v-model="documentForm.totalAmountWithoutTax"/></el-form-item><el-form-item label="税额" required><el-input v-model="documentForm.totalTaxAmount"/></el-form-item><el-form-item label="价税合计" required><el-input v-model="documentForm.totalTaxIncludedAmount"/></el-form-item></el-form>
-      <template #footer><el-button @click="documentVisible=false">取消</el-button><el-button type="primary" @click="importDocument">归档并录入</el-button></template>
+      <template #footer><el-button @click="documentVisible=false">取消</el-button><el-button type="primary" :loading="submitting" :disabled="submitting" @click="importDocument">归档并录入</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="importErrorsVisible" title="未导入的文件" width="640px">

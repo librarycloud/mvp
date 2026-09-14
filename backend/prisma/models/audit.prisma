@@ -48,6 +48,7 @@ model AccountingEvent {
 
   @@index([eventType, createdAt])
   @@index([voucherId])
+  @@index([sourceType, sourceId, deletedAt]) // P1 修复：多态来源查询索引（by sourceType + sourceId）
   @@index([deletedAt])
   @@map("accounting_events")
 }

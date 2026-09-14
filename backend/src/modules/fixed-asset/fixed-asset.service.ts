@@ -72,6 +72,8 @@ export class FixedAssetService {
     if (!this.periods) throw new AppError("ACCOUNTING_PERIOD_NOT_CONFIGURED", "未配置会计期间服务，无法生成处置凭证", 500);
     const period = await this.periods.resolveOpenPeriod(date);
     return this.prisma.$transaction(async (tx) => {
+      // P0 修复：加行级锁，防止并发请求重复处置同一资产
+      await tx.$queryRaw`SELECT id FROM fixed_assets WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`;
       const asset = await tx.fixedAsset.findFirst({ where: { id, deletedAt: null }, include: { disposals: { where: { deletedAt: null } } } });
       if (!asset) throw new AppError("FIXED_ASSET_NOT_FOUND", "固定资产不存在", 404);
       if (asset.status !== FIXED_ASSET_STATUS.ACTIVE && asset.status !== FIXED_ASSET_STATUS.INACTIVE) throw new AppError("FIXED_ASSET_FINALIZED", "该资产已处置，不能重复处置", 409);
@@ -124,7 +126,15 @@ export class FixedAssetService {
       const sequence = await getNextVoucherNumber(tx, period.year);
       const total = entries.reduce((sum, entry) => sum.plus(entry.debitAmount), ZERO);
       const voucher = await tx.voucher.create({ data: { ...sequence, fiscalYear: period.year, fiscalPeriod: period.month, voucherDate: date, postingDate: date, periodId: period.id, summary, sourceType: "MANUAL", status: VOUCHER_STATUS.POSTED, totalDebit: total, totalCredit: total, createdById: actor.actorId, reviewerId: actor.actorId, reviewedAt: new Date(), postedById: actor.actorId, postedAt: new Date(), entries: { create: entries } } });
-      await tx.fixedAsset.update({ where: { id }, data: { status: disposalType === "SALE" ? FIXED_ASSET_STATUS.SOLD : FIXED_ASSET_STATUS.DISCARDED } });
+      // P1 修复：处置后同步更新资产的累计折旧和账面净值（原代码遗漏此步骤，导致资产记录残留旧数字）
+      await tx.fixedAsset.update({
+        where: { id },
+        data: {
+          status: disposalType === "SALE" ? FIXED_ASSET_STATUS.SOLD : FIXED_ASSET_STATUS.DISCARDED,
+          accumulatedDepreciation: accumulated,
+          netValue: netBookValue,
+        },
+      });
       const event = await tx.accountingEvent.create({ data: { eventType: "FIXED_ASSET_DISPOSAL", sourceType: "FixedAssetDisposal", sourceId: result.id, voucherId: voucher.id, description: summary, createdById: actor.actorId } });
       await tx.fixedAssetDisposal.update({ where: { id: result.id }, data: { voucherId: voucher.id } });
       await this.audit(tx, actor.actorId, "CREATE", result.id, { assetId: id, disposalType, proceeds: proceeds.toString(), netBookValue: netBookValue.toString(), gainLoss: gainLoss.toString(), voucherId: voucher.id, eventId: event.id });

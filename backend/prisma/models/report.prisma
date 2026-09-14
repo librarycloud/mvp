@@ -133,6 +133,7 @@ model ReportLine {
   reportItem ReportItem @relation(fields: [reportItemId], references: [id], onDelete: Restrict)
 
   @@unique([reportId, reportItemId])
+  @@index([reportItemId]) // P1 修复：报表项目穿透下钻查询索引
   @@index([deletedAt])
   @@map("report_lines")
 }

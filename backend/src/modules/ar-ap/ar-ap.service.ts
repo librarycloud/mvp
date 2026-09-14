@@ -81,8 +81,13 @@ export class ArApService {
     if (kind === "receivable" && profile?.operationMode === "STANDARD") {
       const customer = await this.prisma.customer.findUniqueOrThrow({ where: { id: input.partyId } });
       if (customer.creditLimit.greaterThan(0)) {
-        const existing = (await this.balances("receivable")).find((row) => row.code === customer.code)?.outstanding ?? ZERO;
-        if (existing.plus(amount).greaterThan(customer.creditLimit)) throw new AppError("CREDIT_LIMIT_EXCEEDED", "应收登记将超过客户信用额度", 409, { creditLimit: customer.creditLimit.toString(), outstanding: existing.toString() });
+        // P1 修复：原来调用 balances() 会加载全部应收记录到内存，改为单客户聚合查询
+        const totals = await this.prisma.receivable.aggregate({
+          where: { customerId: input.partyId, deletedAt: null },
+          _sum: { amount: true, settledAmount: true },
+        });
+        const outstanding = (totals._sum.amount ?? ZERO).minus(totals._sum.settledAmount ?? ZERO);
+        if (outstanding.plus(amount).greaterThan(customer.creditLimit)) throw new AppError("CREDIT_LIMIT_EXCEEDED", "应收登记将超过客户信用额度", 409, { creditLimit: customer.creditLimit.toString(), outstanding: outstanding.toString() });
       }
     }
     const common = { documentNo: input.documentNo.trim(), occurrenceDate, dueDate, amount, currency: (input.currency ?? "CNY").toUpperCase(), description: input.description?.trim() || null, createdById: actor.actorId };

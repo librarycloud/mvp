@@ -30,6 +30,8 @@ export async function authRoutes(app: FastifyInstance, options: AuthRoutesOption
   const { controller } = options;
 
   app.post("/login", {
+    // P1 安全修复：登录接口限流，每个 IP 每分钟最多 10 次，防止暴力破解
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
     schema: {
       tags: ["认证"],
       summary: "用户登录",
@@ -40,6 +42,8 @@ export async function authRoutes(app: FastifyInstance, options: AuthRoutesOption
   });
 
   app.post("/refresh", {
+    // P1 安全修复：刷新令牌接口限流，防止枚举刷新令牌
+    config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
     schema: {
       tags: ["认证"],
       summary: "轮换访问令牌和刷新令牌",

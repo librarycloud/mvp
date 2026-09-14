@@ -117,6 +117,7 @@ model VoucherEntry {
 
   @@unique([voucherId, lineNo])
   @@index([accountId])
+  @@index([voucherId, deletedAt]) // P1 修复：凭证分录查询 (voucherId + deletedAt) 复合索引
   @@index([deletedAt])
   @@map("voucher_entries")
 }
