@@ -112,6 +112,135 @@ export class BankReconciliationService {
     };
   }
 
+  async getSuggestedBalances(periodId: number, bankAccountId: number) {
+    const [period, account, profile] = await Promise.all([
+      this.prisma.accountingPeriod.findFirst({ where: { id: periodId, deletedAt: null } }),
+      this.prisma.account.findFirst({ where: { id: bankAccountId, deletedAt: null, isEnabled: true, isLeaf: true } }),
+      this.prisma.companyProfile.findFirst({ where: { deletedAt: null }, select: { bankAccount: true } }),
+    ]);
+    if (!period) throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND", "会计期间不存在", 404);
+    if (!account || !account.code.startsWith("1002")) throw new AppError("INVALID_BANK_ACCOUNT", "请选择银行存款末级科目", 400);
+
+    const ownBankAccount = this.accountNumber(profile?.bankAccount);
+
+    const prevClosing = await this.getPreviousClosingBalance(periodId, bankAccountId);
+
+    const [currentTransactions, priorTransactions] = await Promise.all([
+      this.prisma.bankTransaction.findMany({
+        where: {
+          deletedAt: null,
+          transactionDate: { gte: period.startDate, lte: period.endDate },
+        },
+        orderBy: [{ transactionDate: "asc" }, { transactionTime: "asc" }, { transactionNo: "asc" }, { id: "asc" }],
+      }),
+      this.prisma.bankTransaction.findMany({
+        where: {
+          deletedAt: null,
+          transactionDate: { lt: period.startDate },
+        },
+        orderBy: [{ transactionDate: "desc" }, { transactionTime: "desc" }, { transactionNo: "desc" }, { id: "desc" }],
+        take: 20,
+      }),
+    ]);
+
+    const relevantCurrent = ownBankAccount
+      ? currentTransactions.filter(item => [item.payerAccount, item.payeeAccount].some(value => this.accountNumber(value) === ownBankAccount))
+      : currentTransactions;
+    const relevantPrior = ownBankAccount
+      ? priorTransactions.filter(item => [item.payerAccount, item.payeeAccount].some(value => this.accountNumber(value) === ownBankAccount))
+      : priorTransactions;
+
+    // 1. 期初余额计算
+    let openingBalance = "0.00";
+    let openingSource: "PREVIOUS_RECONCILIATION" | "PRIOR_TRANSACTION" | "FIRST_TRANSACTION_DERIVED" | "DEFAULT" = "DEFAULT";
+    let openingReason = "未查询到上期对账单或流水余额，默认设为 0.00";
+
+    const lastPriorWithBal = relevantPrior.find(t => t.balance !== null);
+    const firstCurrentWithBal = relevantCurrent.find(t => t.balance !== null);
+
+    if (prevClosing.hasPrevious && prevClosing.statementClosingBalance != null) {
+      openingBalance = new Prisma.Decimal(prevClosing.statementClosingBalance).toFixed(2);
+      openingSource = "PREVIOUS_RECONCILIATION";
+      openingReason = `已自动带入上期（${prevClosing.periodCode}）银行期末余额 ¥${this.formatMoneyDisplay(prevClosing.statementClosingBalance)}`;
+    } else if (lastPriorWithBal?.balance != null) {
+      openingBalance = new Prisma.Decimal(lastPriorWithBal.balance).toFixed(2);
+      openingSource = "PRIOR_TRANSACTION";
+      const dateStr = this.formatDateDisplay(lastPriorWithBal.transactionDate);
+      openingReason = `已根据上期末银行流水（${dateStr}）账户余额获取 ¥${this.formatMoneyDisplay(lastPriorWithBal.balance)}`;
+    } else if (firstCurrentWithBal?.balance != null) {
+      const dir = this.transactionDirection(firstCurrentWithBal, profile?.bankAccount);
+      let derived: Prisma.Decimal;
+      if (dir === "INFLOW") {
+        derived = firstCurrentWithBal.balance.minus(firstCurrentWithBal.amount.abs());
+      } else if (dir === "OUTFLOW") {
+        derived = firstCurrentWithBal.balance.plus(firstCurrentWithBal.amount.abs());
+      } else if (firstCurrentWithBal.amount.isNegative()) {
+        derived = firstCurrentWithBal.balance.plus(firstCurrentWithBal.amount.abs());
+      } else {
+        derived = firstCurrentWithBal.balance.minus(firstCurrentWithBal.amount.abs());
+      }
+      openingBalance = derived.toFixed(2);
+      openingSource = "FIRST_TRANSACTION_DERIVED";
+      const dateStr = this.formatDateDisplay(firstCurrentWithBal.transactionDate);
+      openingReason = `已根据本期首笔流水（${dateStr}）倒推期初余额 ¥${this.formatMoneyDisplay(derived)}`;
+    }
+
+    // 2. 期末余额计算
+    let closingBalance = openingBalance;
+    let closingSource: "LATEST_TRANSACTION_BALANCE" | "CALCULATED" | "MATCH_OPENING" | "DEFAULT" = "DEFAULT";
+    let closingReason = "当前期间暂无银行流水记录，期末余额与期初保持一致";
+
+    const lastCurrentWithBal = [...relevantCurrent].reverse().find(t => t.balance !== null);
+
+    if (lastCurrentWithBal?.balance != null) {
+      closingBalance = new Prisma.Decimal(lastCurrentWithBal.balance).toFixed(2);
+      closingSource = "LATEST_TRANSACTION_BALANCE";
+      const dateStr = this.formatDateDisplay(lastCurrentWithBal.transactionDate);
+      closingReason = `已根据本期最后一笔银行流水（${dateStr}）账户余额自动获取 ¥${this.formatMoneyDisplay(lastCurrentWithBal.balance)}`;
+    } else if (relevantCurrent.length > 0) {
+      let net = ZERO;
+      for (const t of relevantCurrent) {
+        const dir = this.transactionDirection(t, profile?.bankAccount);
+        if (dir === "INFLOW") net = net.plus(t.amount.abs());
+        else if (dir === "OUTFLOW") net = net.minus(t.amount.abs());
+        else if (t.amount.isNegative()) net = net.plus(t.amount);
+        else net = net.plus(t.amount);
+      }
+      const calculated = new Prisma.Decimal(openingBalance).plus(net);
+      closingBalance = calculated.toFixed(2);
+      closingSource = "CALCULATED";
+      closingReason = `本期流水无直接余额，根据期初余额及 ${relevantCurrent.length} 笔流水发生额推算得出 ¥${this.formatMoneyDisplay(calculated)}`;
+    } else if (openingBalance === "0.00") {
+      closingBalance = "0.00";
+      closingSource = "DEFAULT";
+      closingReason = "当前期间暂无银行流水，默认设为 0.00";
+    } else {
+      closingBalance = openingBalance;
+      closingSource = "MATCH_OPENING";
+      closingReason = "当前期间暂无银行流水，期末余额与期初余额保持一致";
+    }
+
+    return {
+      periodId: period.id,
+      periodCode: period.periodCode,
+      bankAccountId: account.id,
+      bankAccountCode: account.code,
+      bankAccountName: account.name,
+      transactionCount: relevantCurrent.length,
+      openingBalance,
+      openingSource,
+      openingReason,
+      hasPreviousReconciliation: prevClosing.hasPrevious,
+      previousPeriodCode: prevClosing.periodCode,
+      previousClosingBalance: prevClosing.statementClosingBalance ? new Prisma.Decimal(prevClosing.statementClosingBalance).toFixed(2) : null,
+      closingBalance,
+      closingSource,
+      closingReason,
+      latestTransactionDate: lastCurrentWithBal ? this.formatDateDisplay(lastCurrentWithBal.transactionDate) : null,
+      latestTransactionBalance: lastCurrentWithBal?.balance ? new Prisma.Decimal(lastCurrentWithBal.balance).toFixed(2) : null,
+    };
+  }
+
   async detail(id: number) {
     const row = await this.require(id);
     const [transactions, entries, matches, profile, currentBookClosing, unpostedBankEntryCount] = await Promise.all([
@@ -299,4 +428,14 @@ export class BankReconciliationService {
   private sumBy<T>(items: T[], key: (item: T) => number) { const sums = new Map<number, Prisma.Decimal>(); for (const item of items as Array<T & { matchedAmount: Prisma.Decimal }>) sums.set(key(item), (sums.get(key(item)) ?? ZERO).plus(item.matchedAmount)); return sums; }
   private admin(actor: BankReconciliationActor) { if (canOperateCash(actor.role)) return; throw new AppError("FORBIDDEN", "仅出纳或财务主管可以完成或重新打开银行对账", 403); }
   private audit(tx: Prisma.TransactionClient, actorId: number, action: "CREATE" | "UPDATE" | "DELETE", resourceId: number, afterData: object, beforeData?: object) { return tx.auditLog.create({ data: { actorId, action, resourceType: "BankReconciliation", resourceId, beforeData: beforeData ?? Prisma.JsonNull, afterData } }); }
+  private formatMoneyDisplay(value: unknown) {
+    if (value === null || value === undefined || value === "") return "-";
+    const num = Number(value);
+    if (isNaN(num)) return String(value);
+    return num.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  private formatDateDisplay(date: Date) {
+    if (!date) return "";
+    return date instanceof Date ? date.toISOString().slice(0, 10) : String(date).slice(0, 10);
+  }
 }

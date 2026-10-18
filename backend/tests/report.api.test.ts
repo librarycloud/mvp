@@ -20,7 +20,7 @@ describe("report API", () => {
     const authRepository = new FakeAuthRepository();
     authRepository.users.push({
       id: 1, username: "user", displayName: "普通用户",
-      passwordHash: await bcrypt.hash("correct-password", 4), role: "ACCOUNTANT", status: 0,
+      passwordHash: await bcrypt.hash("correct-password", 4), role: "FINANCE_MANAGER", status: 0,
     });
     const app = await buildApp({ config, authRepository, reportRepository: new FakeReportRepository(), logger: false });
     apps.push(app);
@@ -38,7 +38,7 @@ describe("report API", () => {
     const authRepository = new FakeAuthRepository();
     authRepository.users.push({
       id: 1, username: "user", displayName: "普通用户",
-      passwordHash: await bcrypt.hash("correct-password", 4), role: "ACCOUNTANT", status: 0,
+      passwordHash: await bcrypt.hash("correct-password", 4), role: "FINANCE_MANAGER", status: 0,
     });
     const app = await buildApp({ config, authRepository, reportRepository: new FakeReportRepository(), logger: false });
     apps.push(app);
@@ -56,7 +56,7 @@ describe("report API", () => {
     const authRepository = new FakeAuthRepository();
     authRepository.users.push({
       id: 1, username: "user", displayName: "普通用户",
-      passwordHash: await bcrypt.hash("correct-password", 4), role: "ACCOUNTANT", status: 0,
+      passwordHash: await bcrypt.hash("correct-password", 4), role: "FINANCE_MANAGER", status: 0,
     });
     const reportRepository = new FakeReportRepository();
     reportRepository.template = { ...reportRepository.template!, code: "CASH_FLOW_STATEMENT_CN_ASBE_V1", type: "CASH_FLOW_STATEMENT" };
@@ -75,7 +75,7 @@ describe("report API", () => {
     const authRepository = new FakeAuthRepository();
     authRepository.users.push({
       id: 1, username: "user", displayName: "普通用户",
-      passwordHash: await bcrypt.hash("correct-password", 4), role: "ACCOUNTANT", status: 0,
+      passwordHash: await bcrypt.hash("correct-password", 4), role: "FINANCE_MANAGER", status: 0,
     });
     const reportRepository = new FakeReportRepository();
     reportRepository.template = { ...reportRepository.template!, code: "EQUITY_CHANGE_STATEMENT_CN_ASBE_V1", type: "EQUITY_CHANGE_STATEMENT" };

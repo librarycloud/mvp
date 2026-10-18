@@ -40,9 +40,16 @@ describe("YearEndClosingService", () => {
         ],
       },
       voucher: {
+        findMany: async () => [],
         create: async (data: any) => ({ ...mockVoucher, ...data.data }),
+        update: async () => ({}),
       },
       accountingEvent: {
+        findMany: async () => [],
+        create: async () => ({ id: 1 }),
+        update: async () => ({}),
+      },
+      auditLog: {
         create: async () => ({ id: 1 }),
       },
       $executeRaw: async () => 1,
@@ -59,5 +66,53 @@ describe("YearEndClosingService", () => {
     expect(voucher.id).toBe(888);
     expect(voucher.totalDebit.toString()).toBe("1400");
     expect(voucher.totalCredit.toString()).toBe("1400");
+  });
+
+  it("prevents duplicate monthly P&L closing for the same period", async () => {
+    const mockTx = {
+      accountingPeriod: {
+        findFirst: async () => ({ id: 10, year: 2026, month: 7, periodCode: "2026-07", status: 0 }),
+      },
+      voucher: {
+        findMany: async () => [{ id: 101, voucherNo: "2026-000101" }],
+      },
+    };
+    const mockPrisma = {
+      $transaction: async (fn: any) => fn(mockTx),
+    };
+    const service = new YearEndClosingService(mockPrisma as any);
+    await expect(service.closeMonthlyPnl(10, 4103, { actorId: 1, role: "ADMIN" })).rejects.toMatchObject({
+      code: "MONTHLY_PNL_ALREADY_EXISTS",
+    });
+  });
+
+  it("cancels monthly P&L closing by voiding existing closing vouchers", async () => {
+    const updatedVouchers: any[] = [];
+    const mockTx = {
+      accountingPeriod: {
+        findFirst: async () => ({ id: 10, periodCode: "2026-07", status: 0 }),
+      },
+      accountingEvent: {
+        findMany: async () => [{ id: 1, voucherId: 101, voucher: { id: 101, status: 2 } }],
+        update: async () => ({}),
+      },
+      voucher: {
+        findMany: async () => [{ id: 101, voucherNo: "2026-000101", status: 2 }],
+        update: async (args: any) => {
+          updatedVouchers.push(args);
+          return {};
+        },
+      },
+      auditLog: {
+        create: async () => ({}),
+      },
+    };
+    const mockPrisma = {
+      $transaction: async (fn: any) => fn(mockTx),
+    };
+    const service = new YearEndClosingService(mockPrisma as any);
+    const result = await service.cancelMonthlyPnl(10, "测试撤销", { actorId: 1, role: "ADMIN" });
+    expect(result.voidedCount).toBe(1);
+    expect(updatedVouchers[0]?.data.status).toBe(3); // VOUCHER_STATUS.VOID
   });
 });

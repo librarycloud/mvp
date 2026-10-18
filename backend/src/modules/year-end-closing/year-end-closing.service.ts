@@ -318,6 +318,123 @@ export class YearEndClosingService {
     });
   }
 
+  async getMonthlyPnlStatus(periodId: number) {
+    const period = await this.prisma.accountingPeriod.findFirst({ where: { id: periodId, deletedAt: null } });
+    if (!period) throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND", "会计期间不存在", 404);
+
+    const vouchers = await this.prisma.voucher.findMany({
+      where: {
+        periodId: period.id,
+        category: "CLOSING",
+        summary: { contains: "期末损益结转" },
+        deletedAt: null,
+        status: { not: VOUCHER_STATUS.VOID },
+      },
+      select: {
+        id: true,
+        voucherNo: true,
+        status: true,
+        totalDebit: true,
+        totalCredit: true,
+        createdAt: true,
+      },
+      orderBy: { id: "desc" },
+    });
+
+    return {
+      hasClosed: vouchers.length > 0,
+      vouchers,
+      voucher: vouchers[0] ?? null,
+      duplicateCount: vouchers.length,
+    };
+  }
+
+  async cancelMonthlyPnl(periodId: number, reason: string, actor?: YearEndActor) {
+    if (actor) {
+      this.admin(actor);
+    }
+    const currentActorId = actor?.actorId;
+    if (!currentActorId) {
+      throw new AppError("FORBIDDEN", "缺少有效操作人，无法撤销月度结转", 403);
+    }
+    const trimmedReason = reason?.trim() || "撤销月度损益结转";
+
+    return this.prisma.$transaction(async (tx) => {
+      const period = await tx.accountingPeriod.findFirst({ where: { id: periodId, deletedAt: null } });
+      if (!period) throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND", "会计期间不存在", 404);
+      if (period.status !== ACCOUNTING_PERIOD_STATUS.OPEN) {
+        throw new AppError("PERIOD_CLOSED", "已关账会计期间不能撤销损益结转，请先反关账", 409);
+      }
+
+      const events = await tx.accountingEvent.findMany({
+        where: {
+          eventType: "MONTHLY_PNL",
+          sourceId: period.id,
+          deletedAt: null,
+        },
+        include: { voucher: true },
+      });
+
+      const closingVouchers = await tx.voucher.findMany({
+        where: {
+          periodId: period.id,
+          category: "CLOSING",
+          summary: { contains: "期末损益结转" },
+          deletedAt: null,
+          status: { not: VOUCHER_STATUS.VOID },
+        },
+      });
+
+      const voucherIdsToVoid = new Set<number>();
+      for (const e of events) {
+        if (e.voucherId) voucherIdsToVoid.add(e.voucherId);
+        if (e.voucher && e.voucher.status !== VOUCHER_STATUS.VOID) {
+          voucherIdsToVoid.add(e.voucher.id);
+        }
+      }
+      for (const v of closingVouchers) {
+        voucherIdsToVoid.add(v.id);
+      }
+
+      if (voucherIdsToVoid.size === 0 && events.length === 0) {
+        throw new AppError("MONTHLY_PNL_NOT_FOUND", "当前期间未找到生效中的损益结转凭证", 404);
+      }
+
+      const now = new Date();
+      for (const vid of voucherIdsToVoid) {
+        await tx.voucher.update({
+          where: { id: vid },
+          data: {
+            status: VOUCHER_STATUS.VOID,
+            voidById: currentActorId,
+            voidAt: now,
+            voidReason: trimmedReason,
+          },
+        });
+      }
+
+      for (const e of events) {
+        await tx.accountingEvent.update({
+          where: { id: e.id },
+          data: { deletedAt: now },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          actorId: currentActorId,
+          action: "UPDATE",
+          resourceType: "MonthlyPnlClosing",
+          resourceId: period.id,
+          description: `撤销 ${period.periodCode} 月度损益结转凭证共 ${voucherIdsToVoid.size} 张：${trimmedReason}`,
+          afterData: { periodId, voidedVoucherIds: Array.from(voucherIdsToVoid), reason: trimmedReason },
+        },
+      });
+
+      return { voidedCount: voucherIdsToVoid.size };
+    });
+  }
+
   async closeMonthlyPnl(periodId: number, profitAccountId?: number, actor?: YearEndActor) {
     if (actor) {
       this.admin(actor);
@@ -331,6 +448,25 @@ export class YearEndClosingService {
       const period = await tx.accountingPeriod.findFirst({ where: { id: periodId, deletedAt: null } });
       if (!period) throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND", "会计期间不存在", 404);
       if (period.status !== ACCOUNTING_PERIOD_STATUS.OPEN) throw new AppError("PERIOD_CLOSED", "已关账期间不能执行结转", 409);
+
+      // 防重复结转检查
+      const existingClosingVouchers = await tx.voucher.findMany({
+        where: {
+          periodId: period.id,
+          category: "CLOSING",
+          summary: { contains: "期末损益结转" },
+          deletedAt: null,
+          status: { not: VOUCHER_STATUS.VOID },
+        },
+      });
+      if (existingClosingVouchers.length > 0) {
+        const voucherNos = existingClosingVouchers.map((v) => v.voucherNo).join("、");
+        throw new AppError(
+          "MONTHLY_PNL_ALREADY_EXISTS",
+          `该期间已存在生效中的月度损益结转凭证（${voucherNos}），不能重复结转。如需重新结转请先撤销原有结转凭证。`,
+          409,
+        );
+      }
 
       const profit = profitAccountId
         ? await tx.account.findFirst({ where: { id: profitAccountId, deletedAt: null, isEnabled: true, isLeaf: true } })

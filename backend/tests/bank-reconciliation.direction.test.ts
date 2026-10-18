@@ -140,3 +140,93 @@ describe("BankReconciliationService getPreviousClosingBalance", () => {
   });
 });
 
+describe("BankReconciliationService getSuggestedBalances", () => {
+  it("prioritizes prior reconciliation closing balance for opening, and uses latest transaction balance for closing", async () => {
+    const period = { id: 10, year: 2026, month: 8, periodCode: "2026-08", startDate: new Date("2026-08-01"), endDate: new Date("2026-08-31") };
+    const account = { id: 1, code: "100201", name: "招商银行" };
+    const prisma: any = {
+      accountingPeriod: { findFirst: vi.fn().mockResolvedValue(period) },
+      account: { findFirst: vi.fn().mockResolvedValue(account) },
+      companyProfile: { findFirst: vi.fn().mockResolvedValue({ bankAccount: "62220001" }) },
+      bankReconciliation: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 5,
+          periodId: 9,
+          statementClosingBalance: new Prisma.Decimal("100000.00"),
+          period: { id: 9, periodCode: "2026-07", year: 2026, month: 7 },
+        }),
+      },
+      bankTransaction: {
+        findMany: vi.fn()
+          .mockResolvedValueOnce([
+            { id: 1, transactionDate: new Date("2026-08-05"), transactionTime: new Date("2026-08-05T10:00:00Z"), transactionNo: "TX01", amount: new Prisma.Decimal("2000"), balance: new Prisma.Decimal("102000.00"), payerAccount: "OTHER", payeeAccount: "62220001" },
+            { id: 2, transactionDate: new Date("2026-08-20"), transactionTime: new Date("2026-08-20T15:00:00Z"), transactionNo: "TX02", amount: new Prisma.Decimal("-5000"), balance: new Prisma.Decimal("97000.00"), payerAccount: "62220001", payeeAccount: "OTHER" },
+          ])
+          .mockResolvedValueOnce([]),
+      },
+    };
+    const service = new BankReconciliationService(prisma);
+    const result = await service.getSuggestedBalances(10, 1);
+    expect(result.openingBalance).toBe("100000.00");
+    expect(result.openingSource).toBe("PREVIOUS_RECONCILIATION");
+    expect(result.closingBalance).toBe("97000.00");
+    expect(result.closingSource).toBe("LATEST_TRANSACTION_BALANCE");
+    expect(result.transactionCount).toBe(2);
+  });
+
+  it("derives opening balance from first transaction when no prior statement exists", async () => {
+    const period = { id: 10, year: 2026, month: 8, periodCode: "2026-08", startDate: new Date("2026-08-01"), endDate: new Date("2026-08-31") };
+    const account = { id: 1, code: "100201", name: "招商银行" };
+    const prisma: any = {
+      accountingPeriod: { findFirst: vi.fn().mockResolvedValue(period) },
+      account: { findFirst: vi.fn().mockResolvedValue(account) },
+      companyProfile: { findFirst: vi.fn().mockResolvedValue(null) },
+      bankReconciliation: { findFirst: vi.fn().mockResolvedValue(null) },
+      bankTransaction: {
+        findMany: vi.fn()
+          .mockResolvedValueOnce([
+            { id: 1, transactionDate: new Date("2026-08-02"), transactionTime: new Date("2026-08-02T10:00:00Z"), transactionNo: "TX01", amount: new Prisma.Decimal("5000"), balance: new Prisma.Decimal("25000.00"), payerAccount: null, payeeAccount: null },
+          ])
+          .mockResolvedValueOnce([]),
+      },
+    };
+    const service = new BankReconciliationService(prisma);
+    const result = await service.getSuggestedBalances(10, 1);
+    expect(result.openingBalance).toBe("20000.00");
+    expect(result.openingSource).toBe("FIRST_TRANSACTION_DERIVED");
+    expect(result.closingBalance).toBe("25000.00");
+    expect(result.closingSource).toBe("LATEST_TRANSACTION_BALANCE");
+  });
+
+  it("calculates closing balance when transactions have no balance column", async () => {
+    const period = { id: 10, year: 2026, month: 8, periodCode: "2026-08", startDate: new Date("2026-08-01"), endDate: new Date("2026-08-31") };
+    const account = { id: 1, code: "100201", name: "招商银行" };
+    const prisma: any = {
+      accountingPeriod: { findFirst: vi.fn().mockResolvedValue(period) },
+      account: { findFirst: vi.fn().mockResolvedValue(account) },
+      companyProfile: { findFirst: vi.fn().mockResolvedValue(null) },
+      bankReconciliation: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 5,
+          periodId: 9,
+          statementClosingBalance: new Prisma.Decimal("50000.00"),
+          period: { id: 9, periodCode: "2026-07", year: 2026, month: 7 },
+        }),
+      },
+      bankTransaction: {
+        findMany: vi.fn()
+          .mockResolvedValueOnce([
+            { id: 1, transactionDate: new Date("2026-08-05"), transactionTime: new Date("2026-08-05T10:00:00Z"), transactionNo: "TX01", amount: new Prisma.Decimal("10000"), balance: null, payerAccount: null, payeeAccount: null },
+            { id: 2, transactionDate: new Date("2026-08-10"), transactionTime: new Date("2026-08-10T10:00:00Z"), transactionNo: "TX02", amount: new Prisma.Decimal("-3000"), balance: null, payerAccount: null, payeeAccount: null },
+          ])
+          .mockResolvedValueOnce([]),
+      },
+    };
+    const service = new BankReconciliationService(prisma);
+    const result = await service.getSuggestedBalances(10, 1);
+    expect(result.openingBalance).toBe("50000.00");
+    expect(result.closingBalance).toBe("57000.00");
+    expect(result.closingSource).toBe("CALCULATED");
+  });
+});
+

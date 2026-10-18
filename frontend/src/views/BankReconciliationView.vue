@@ -17,13 +17,33 @@ const loading = ref(false); const createVisible = ref(false); const editVisible 
 const directionSavingId = ref<number>();
 const onlyUnmatched = ref(false);
 
-const form = reactive({ periodId: "" as number | "", bankAccountId: "" as number | "", statementOpeningBalance: "0", statementClosingBalance: "0", remark: "" });
-const editForm = reactive({ statementOpeningBalance: "0", statementClosingBalance: "0", remark: "" });
+interface SuggestedBalanceInfo {
+  periodId: number;
+  periodCode: string;
+  bankAccountId: number;
+  bankAccountCode: string;
+  bankAccountName: string;
+  transactionCount: number;
+  openingBalance: string;
+  openingSource: string;
+  openingReason: string;
+  hasPreviousReconciliation: boolean;
+  previousPeriodCode?: string | null;
+  previousClosingBalance?: string | null;
+  closingBalance: string;
+  closingSource: string;
+  closingReason: string;
+  latestTransactionDate?: string | null;
+  latestTransactionBalance?: string | null;
+}
+
+const form = reactive({ periodId: "" as number | "", bankAccountId: "" as number | "", statementOpeningBalance: "0.00", statementClosingBalance: "0.00", remark: "" });
+const editForm = reactive({ statementOpeningBalance: "0.00", statementClosingBalance: "0.00", remark: "" });
 const matchForm = reactive({ bankTransactionId: "" as number | "", voucherEntryId: "" as number | "", matchedAmount: "" });
-const previousCreateInfo = ref<{ hasPrevious: boolean; periodCode?: string; statementClosingBalance?: string } | null>(null);
-const previousEditInfo = ref<{ hasPrevious: boolean; periodCode?: string; statementClosingBalance?: string } | null>(null);
-const loadingPreviousCreate = ref(false);
-const loadingPreviousEdit = ref(false);
+const createSuggested = ref<SuggestedBalanceInfo | null>(null);
+const editSuggested = ref<SuggestedBalanceInfo | null>(null);
+const loadingSuggestedCreate = ref(false);
+const loadingSuggestedEdit = ref(false);
 
 const draftTransactions = computed(() => active.value?.transactions?.filter((row:any) => Number(row.remainingAmount) > 0) ?? []);
 const draftEntries = computed(() => active.value?.entries?.filter((row:any) => Number(row.remainingAmount) > 0) ?? []);
@@ -88,84 +108,112 @@ function goToVouchers() {
 async function load() { loading.value = true; try { rows.value = await api.get<any[]>("/bank-reconciliations"); } finally { loading.value = false; } }
 async function support() { [periods.value, accounts.value] = await Promise.all([api.get<any[]>("/accounting-periods"), api.get<any[]>("/accounts?tree=false&isEnabled=true")]); accounts.value = accounts.value.filter(row => row.isLeaf && row.code.startsWith("1002")); }
 
-async function syncCreateOpeningBalance(manual = false) {
+async function syncCreateBalances(autoFill = false) {
   if (!form.periodId || !form.bankAccountId) {
-    previousCreateInfo.value = null;
+    createSuggested.value = null;
     return;
   }
-  loadingPreviousCreate.value = true;
+  loadingSuggestedCreate.value = true;
   try {
-    const res = await api.get<{ hasPrevious: boolean; periodCode?: string; statementClosingBalance?: string }>(
-      `/bank-reconciliations/previous-closing?periodId=${form.periodId}&bankAccountId=${form.bankAccountId}`
+    const res = await api.get<SuggestedBalanceInfo>(
+      `/bank-reconciliations/suggested-balances?periodId=${form.periodId}&bankAccountId=${form.bankAccountId}`
     );
-    previousCreateInfo.value = res;
-    if (res.hasPrevious && res.statementClosingBalance != null) {
-      form.statementOpeningBalance = res.statementClosingBalance;
-      if (manual) ElMessage.success(`已带入上期（${res.periodCode}）银行期末余额 ¥${res.statementClosingBalance}`);
-    } else if (manual) {
-      ElMessage.info("未查询到上一期间的银行对账单记录");
+    createSuggested.value = res;
+    if (autoFill) {
+      if (res.openingBalance) form.statementOpeningBalance = res.openingBalance;
+      if (res.closingBalance) form.statementClosingBalance = res.closingBalance;
     }
-  } catch (error: any) {
-    if (manual) ElMessage.error(error.message || "获取上期余额失败");
+  } catch {
+    createSuggested.value = null;
   } finally {
-    loadingPreviousCreate.value = false;
+    loadingSuggestedCreate.value = false;
   }
 }
 
+function applyOpeningToCreate(fromPrevious = false) {
+  if (!createSuggested.value) return;
+  if (fromPrevious) {
+    if (createSuggested.value.hasPreviousReconciliation && createSuggested.value.previousClosingBalance) {
+      form.statementOpeningBalance = createSuggested.value.previousClosingBalance;
+      ElMessage.success(`已带入上期（${createSuggested.value.previousPeriodCode}）银行期末余额 ¥${createSuggested.value.previousClosingBalance}`);
+    } else {
+      ElMessage.info("未查询到上一期间的银行对账单记录");
+    }
+  } else {
+    form.statementOpeningBalance = createSuggested.value.openingBalance;
+    ElMessage.success(`已应用期初余额 ¥${createSuggested.value.openingBalance}`);
+  }
+}
+
+function applyClosingToCreate() {
+  if (!createSuggested.value) return;
+  form.statementClosingBalance = createSuggested.value.closingBalance;
+  ElMessage.success(`已从银行流水应用期末余额 ¥${createSuggested.value.closingBalance}`);
+}
+
 async function openCreate() {
-  previousCreateInfo.value = null;
+  createSuggested.value = null;
   Object.assign(form, {
     periodId: periods.value.find(row => row.status === 0)?.id ?? periods.value[0]?.id ?? "",
     bankAccountId: accounts.value[0]?.id ?? "",
-    statementOpeningBalance: "0",
-    statementClosingBalance: "0",
+    statementOpeningBalance: "0.00",
+    statementClosingBalance: "0.00",
     remark: "",
   });
   createVisible.value = true;
-  await syncCreateOpeningBalance(false);
+  await syncCreateBalances(true);
 }
 
 async function create() { await api.post("/bank-reconciliations", form); createVisible.value = false; await load(); ElMessage.success("银行对账单已建立"); }
 async function open(row:any) { active.value = await api.get(`/bank-reconciliations/${row.id}`); }
 
-async function loadPreviousForEdit() {
+async function loadSuggestedForEdit() {
   const periodId = active.value?.periodId ?? active.value?.period?.id;
   const bankAccountId = active.value?.bankAccountId ?? active.value?.bankAccount?.id;
   if (!periodId || !bankAccountId) return;
-  loadingPreviousEdit.value = true;
+  loadingSuggestedEdit.value = true;
   try {
-    const res = await api.get<{ hasPrevious: boolean; periodCode?: string; statementClosingBalance?: string }>(
-      `/bank-reconciliations/previous-closing?periodId=${periodId}&bankAccountId=${bankAccountId}`
+    const res = await api.get<SuggestedBalanceInfo>(
+      `/bank-reconciliations/suggested-balances?periodId=${periodId}&bankAccountId=${bankAccountId}`
     );
-    previousEditInfo.value = res;
+    editSuggested.value = res;
   } catch {
-    previousEditInfo.value = null;
+    editSuggested.value = null;
   } finally {
-    loadingPreviousEdit.value = false;
+    loadingSuggestedEdit.value = false;
   }
 }
 
-async function applyPreviousToEdit() {
-  if (!previousEditInfo.value) {
-    await loadPreviousForEdit();
+function applyOpeningToEdit(fromPrevious = false) {
+  if (!editSuggested.value) return;
+  if (fromPrevious) {
+    if (editSuggested.value.hasPreviousReconciliation && editSuggested.value.previousClosingBalance) {
+      editForm.statementOpeningBalance = editSuggested.value.previousClosingBalance;
+      ElMessage.success(`已带入上期（${editSuggested.value.previousPeriodCode}）银行期末余额 ¥${editSuggested.value.previousClosingBalance}`);
+    } else {
+      ElMessage.info("未查询到上一期间的银行对账单记录");
+    }
+  } else {
+    editForm.statementOpeningBalance = editSuggested.value.openingBalance;
+    ElMessage.success(`已应用期初余额 ¥${editSuggested.value.openingBalance}`);
   }
-  if (!previousEditInfo.value?.hasPrevious || previousEditInfo.value.statementClosingBalance == null) {
-    ElMessage.info("未查询到上一期间的银行对账单记录");
-    return;
-  }
-  editForm.statementOpeningBalance = previousEditInfo.value.statementClosingBalance;
-  ElMessage.success(`已带入上期（${previousEditInfo.value.periodCode}）银行期末余额 ¥${previousEditInfo.value.statementClosingBalance}`);
+}
+
+function applyClosingToEdit() {
+  if (!editSuggested.value) return;
+  editForm.statementClosingBalance = editSuggested.value.closingBalance;
+  ElMessage.success(`已从银行流水应用期末余额 ¥${editSuggested.value.closingBalance}`);
 }
 
 function openEdit() {
-  previousEditInfo.value = null;
+  editSuggested.value = null;
   Object.assign(editForm, {
     statementOpeningBalance: String(active.value.statementOpeningBalance),
     statementClosingBalance: String(active.value.statementClosingBalance),
     remark: active.value.remark ?? "",
   });
   editVisible.value = true;
-  loadPreviousForEdit();
+  loadSuggestedForEdit();
 }
 
 async function saveEdit() { editSaving.value = true; try { await api.put(`/bank-reconciliations/${active.value.id}`, editForm); editVisible.value = false; await Promise.all([open(active.value), load()]); ElMessage.success("银行对账单已更新"); } finally { editSaving.value = false; } }
@@ -422,15 +470,15 @@ onMounted(async () => { await Promise.all([support(), load()]); });
     </el-card>
   </template>
 
-  <el-dialog v-model="createVisible" title="建立银行对账单" width="520px">
+  <el-dialog v-model="createVisible" title="建立银行对账单" width="560px">
     <el-form label-width="130px">
       <el-form-item label="会计期间">
-        <el-select v-model="form.periodId" style="width:100%" @change="() => syncCreateOpeningBalance(false)">
+        <el-select v-model="form.periodId" style="width:100%" @change="() => syncCreateBalances(true)">
           <el-option v-for="row in periods" :key="row.id" :label="row.periodCode" :value="row.id"/>
         </el-select>
       </el-form-item>
       <el-form-item label="银行科目">
-        <el-select v-model="form.bankAccountId" filterable style="width:100%" @change="() => syncCreateOpeningBalance(false)">
+        <el-select v-model="form.bankAccountId" filterable style="width:100%" @change="() => syncCreateBalances(true)">
           <el-option v-for="row in accounts" :key="row.id" :label="`${row.code} ${row.name}`" :value="row.id"/>
         </el-select>
         <div v-if="existingReconciliation" class="form-tip" style="color:var(--el-color-danger);font-size:12px;margin-top:4px">
@@ -439,21 +487,47 @@ onMounted(async () => { await Promise.all([support(), load()]); });
       </el-form-item>
       <el-form-item label="银行期初余额">
         <div style="display:flex;gap:8px;width:100%">
-          <el-input v-model="form.statementOpeningBalance"/>
-          <el-button :loading="loadingPreviousCreate" @click="syncCreateOpeningBalance(true)">带入上期期末</el-button>
+          <el-input v-model="form.statementOpeningBalance" placeholder="0.00"/>
+          <el-button-group style="flex-shrink:0">
+            <el-button
+              :loading="loadingSuggestedCreate"
+              :disabled="!createSuggested?.hasPreviousReconciliation"
+              @click="applyOpeningToCreate(true)"
+              title="带入上期对账单期末余额"
+            >
+              带入上期
+            </el-button>
+            <el-button
+              :loading="loadingSuggestedCreate"
+              @click="applyOpeningToCreate(false)"
+              title="根据银行流水推算期初余额"
+            >
+              从流水获取
+            </el-button>
+          </el-button-group>
         </div>
-        <div v-if="previousCreateInfo?.hasPrevious" class="form-tip" style="color:var(--el-text-color-secondary);font-size:12px;margin-top:4px">
-          上期（{{previousCreateInfo.periodCode}}）银行期末余额为 ¥{{previousCreateInfo.statementClosingBalance}}
-        </div>
-        <div v-else-if="previousCreateInfo && !previousCreateInfo.hasPrevious" class="form-tip" style="color:var(--el-text-color-placeholder);font-size:12px;margin-top:4px">
-          未查询到上期对账单，可手工输入期初余额
+        <div v-if="createSuggested?.openingReason" class="form-tip" style="color:var(--el-text-color-secondary);font-size:12px;margin-top:4px">
+          💡 {{ createSuggested.openingReason }}
         </div>
       </el-form-item>
       <el-form-item label="银行期末余额">
-        <el-input v-model="form.statementClosingBalance"/>
+        <div style="display:flex;gap:8px;width:100%">
+          <el-input v-model="form.statementClosingBalance" placeholder="0.00"/>
+          <el-button
+            :loading="loadingSuggestedCreate"
+            style="flex-shrink:0"
+            @click="applyClosingToCreate"
+            title="从本期最后一笔银行流水账户余额提取"
+          >
+            从银行流水提取
+          </el-button>
+        </div>
+        <div v-if="createSuggested?.closingReason" class="form-tip" style="color:var(--el-text-color-secondary);font-size:12px;margin-top:4px">
+          💡 {{ createSuggested.closingReason }}
+        </div>
       </el-form-item>
       <el-form-item label="备注">
-        <el-input v-model="form.remark"/>
+        <el-input v-model="form.remark" placeholder="选填，可填写对账注意事项"/>
       </el-form-item>
     </el-form>
     <template #footer>
@@ -462,24 +536,52 @@ onMounted(async () => { await Promise.all([support(), load()]); });
     </template>
   </el-dialog>
 
-  <el-dialog v-model="editVisible" title="编辑银行对账单" width="520px">
+  <el-dialog v-model="editVisible" title="编辑银行对账单" width="560px">
     <el-form label-width="130px">
       <el-form-item label="会计期间"><el-input :model-value="active?.period?.periodCode" disabled/></el-form-item>
       <el-form-item label="银行科目"><el-input :model-value="active ? `${active.bankAccount.code} ${active.bankAccount.name}` : ''" disabled/></el-form-item>
       <el-form-item label="银行期初余额">
         <div style="display:flex;gap:8px;width:100%">
-          <el-input v-model="editForm.statementOpeningBalance"/>
-          <el-button :loading="loadingPreviousEdit" @click="applyPreviousToEdit">带入上期期末</el-button>
+          <el-input v-model="editForm.statementOpeningBalance" placeholder="0.00"/>
+          <el-button-group style="flex-shrink:0">
+            <el-button
+              :loading="loadingSuggestedEdit"
+              :disabled="!editSuggested?.hasPreviousReconciliation"
+              @click="applyOpeningToEdit(true)"
+              title="带入上期对账单期末余额"
+            >
+              带入上期
+            </el-button>
+            <el-button
+              :loading="loadingSuggestedEdit"
+              @click="applyOpeningToEdit(false)"
+              title="根据银行流水推算期初余额"
+            >
+              从流水获取
+            </el-button>
+          </el-button-group>
         </div>
-        <div v-if="previousEditInfo?.hasPrevious" class="form-tip" style="color:var(--el-text-color-secondary);font-size:12px;margin-top:4px">
-          上期（{{previousEditInfo.periodCode}}）银行期末余额为 ¥{{previousEditInfo.statementClosingBalance}}
-        </div>
-        <div v-else-if="previousEditInfo && !previousEditInfo.hasPrevious" class="form-tip" style="color:var(--el-text-color-placeholder);font-size:12px;margin-top:4px">
-          未查询到上期对账单
+        <div v-if="editSuggested?.openingReason" class="form-tip" style="color:var(--el-text-color-secondary);font-size:12px;margin-top:4px">
+          💡 {{ editSuggested.openingReason }}
         </div>
       </el-form-item>
-      <el-form-item label="银行期末余额"><el-input v-model="editForm.statementClosingBalance"/></el-form-item>
-      <el-form-item label="备注"><el-input v-model="editForm.remark" type="textarea" :rows="3" maxlength="500" show-word-limit/></el-form-item>
+      <el-form-item label="银行期末余额">
+        <div style="display:flex;gap:8px;width:100%">
+          <el-input v-model="editForm.statementClosingBalance" placeholder="0.00"/>
+          <el-button
+            :loading="loadingSuggestedEdit"
+            style="flex-shrink:0"
+            @click="applyClosingToEdit"
+            title="从本期最后一笔银行流水账户余额提取"
+          >
+            从银行流水提取
+          </el-button>
+        </div>
+        <div v-if="editSuggested?.closingReason" class="form-tip" style="color:var(--el-text-color-secondary);font-size:12px;margin-top:4px">
+          💡 {{ editSuggested.closingReason }}
+        </div>
+      </el-form-item>
+      <el-form-item label="备注"><el-input v-model="editForm.remark" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="选填，可填写对账注意事项"/></el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="editVisible=false">取消</el-button>

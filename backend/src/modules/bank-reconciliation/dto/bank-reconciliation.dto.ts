@@ -24,6 +24,10 @@ export const PreviousClosingQuery = Type.Object({
   periodId: Type.Integer({ minimum: 1 }),
   bankAccountId: Type.Integer({ minimum: 1 }),
 });
+export const SuggestedBalancesQuery = Type.Object({
+  periodId: Type.Integer({ minimum: 1 }),
+  bankAccountId: Type.Integer({ minimum: 1 }),
+});
 export const MatchBody = Type.Object({
   bankTransactionId: Type.Integer({ minimum: 1 }),
   voucherEntryId: Type.Integer({ minimum: 1 }),
