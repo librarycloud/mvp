@@ -29,6 +29,13 @@ const suiteProfitAccountId = ref<number | "">("");
 const closingSuiteLoading = ref(false);
 const suiteResult = ref<{ taxVoucher?: string; pnlVoucher?: string } | null>(null);
 
+const suiteStatus = ref<{
+  hasClosed: boolean;
+  voucher?: any;
+  vouchers?: any[];
+  duplicateCount: number;
+} | null>(null);
+
 async function load() { loading.value = true; try { rows.value = await api.get<Period[]>('/accounting-periods'); } finally { loading.value = false; } }
 async function create() { await api.post('/accounting-periods', form); visible.value = false; ElMessage.success('会计期间已创建'); await load(); }
 function openEdit(row: Period) {
@@ -53,10 +60,19 @@ async function reopen(row: Period) {
   await ElMessageBox.confirm(`确认反关账 ${row.periodCode}？`, '反关账', { type: 'warning' });
   await api.post(`/accounting-periods/${row.id}/reopen`); ElMessage.success('已反关账'); await load();
 }
+async function loadSuiteStatus() {
+  if (!suitePeriod.value) return;
+  try {
+    suiteStatus.value = await api.get(`/year-end-closings/monthly-pnl/${suitePeriod.value.id}/status`);
+  } catch {
+    suiteStatus.value = null;
+  }
+}
 async function openClosingSuite(period: Period) {
   suitePeriod.value = period;
   suiteResult.value = null;
   closingSuiteVisible.value = true;
+  await loadSuiteStatus();
   if (!accounts.value.length) {
     try {
       accounts.value = await api.get<any[]>("/accounts");
@@ -93,8 +109,33 @@ async function handleCloseMonthlyPnl() {
     const res = await api.post<any>('/year-end-closings/monthly-pnl', body);
     const voucherNo = res?.voucherNo || res?.voucher?.voucherNo || '已生成';
     ElMessage.success(`月度账结损益凭证生成成功：${voucherNo}`);
-    if (!suiteResult.value) suiteResult.value = {};
-    suiteResult.value.pnlVoucher = voucherNo;
+    await loadSuiteStatus();
+  } finally {
+    closingSuiteLoading.value = false;
+  }
+}
+async function handleCancelSuiteMonthlyPnl() {
+  if (!suitePeriod.value) return;
+  try {
+    await ElMessageBox.confirm(
+      suiteStatus.value && suiteStatus.value.duplicateCount > 1
+        ? `检测到当前期间存在 ${suiteStatus.value.duplicateCount} 张重复生成的损益结转凭证，导致借贷不平衡！确认一键全部撤销并作废吗？`
+        : "确认撤销当前会计期间的月度损益结转吗？撤销后结转凭证将被作废，您可以重新执行损益结转。",
+      "撤销月度损益结转",
+      { type: "warning", confirmButtonText: "确认撤销", cancelButtonText: "取消" }
+    );
+  } catch {
+    return;
+  }
+  closingSuiteLoading.value = true;
+  try {
+    const res = await api.post<any>("/year-end-closings/monthly-pnl/cancel", {
+      periodId: suitePeriod.value.id,
+      reason: "用户手动撤销并重结",
+    });
+    ElMessage.success(`已成功撤销 ${res?.voidedCount ?? 1} 张结转凭证`);
+    suiteResult.value = null;
+    await loadSuiteStatus();
   } finally {
     closingSuiteLoading.value = false;
   }
@@ -186,11 +227,37 @@ onMounted(load);
             </el-form-item>
           </el-form>
           <div style="display:flex; justify-content:space-between; align-items:center; margin-top: 12px;">
-            <span v-if="suiteResult?.pnlVoucher" style="color: #67c23a; font-size: 13px;">
-              ✓ 已生成凭证：<strong>{{ suiteResult.pnlVoucher }}</strong>
-            </span>
-            <span v-else style="color: #909399; font-size: 13px;">尚未生成当期损益结转凭证</span>
-            <el-button type="success" plain :disabled="!suiteProfitAccountId" @click="handleCloseMonthlyPnl">立即结转损益</el-button>
+            <div>
+              <template v-if="suiteStatus?.hasClosed">
+                <span style="color: #67c23a; font-size: 13px;">
+                  ✓ 已生成凭证：<strong>{{ suiteStatus.vouchers?.map((v: any) => v.voucherNo).join('、') }}</strong>
+                </span>
+                <el-tag v-if="suiteStatus.duplicateCount > 1" type="danger" size="small" style="margin-left: 8px;">
+                  ⚠️ 重复凭证 {{ suiteStatus.duplicateCount }} 张
+                </el-tag>
+              </template>
+              <span v-else style="color: #909399; font-size: 13px;">尚未生成当期损益结转凭证</span>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <el-button
+                v-if="suiteStatus?.hasClosed"
+                type="danger"
+                plain
+                :loading="closingSuiteLoading"
+                @click="handleCancelSuiteMonthlyPnl"
+              >
+                {{ suiteStatus.duplicateCount > 1 ? '一键撤销重复凭证' : '撤销结转' }}
+              </el-button>
+              <el-button
+                type="success"
+                plain
+                :disabled="!suiteProfitAccountId || suiteStatus?.hasClosed"
+                :loading="closingSuiteLoading"
+                @click="handleCloseMonthlyPnl"
+              >
+                立即结转损益
+              </el-button>
+            </div>
           </div>
         </el-card>
       </div>

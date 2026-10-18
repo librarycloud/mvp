@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 import { api } from "../utils/api";
@@ -13,6 +13,12 @@ const selectedPeriodId = ref<number | "">("");
 const monthlyProfitAccountId = ref<number | "">("");
 const monthlyLoading = ref(false);
 const monthlyResult = ref<{ taxVoucher?: string; pnlVoucher?: string } | null>(null);
+const monthlyStatus = ref<{
+  hasClosed: boolean;
+  voucher?: any;
+  vouchers?: any[];
+  duplicateCount: number;
+} | null>(null);
 
 // Annual closing state
 const year = ref(String(new Date().getFullYear()));
@@ -43,10 +49,27 @@ async function loadPeriods() {
     } else if (list.length) {
       selectedPeriodId.value = list[0].id;
     }
+    await loadMonthlyStatus();
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.error?.message ?? err?.message ?? "加载会计期间失败，请刷新重试");
   }
 }
+
+async function loadMonthlyStatus() {
+  if (!selectedPeriodId.value) {
+    monthlyStatus.value = null;
+    return;
+  }
+  try {
+    monthlyStatus.value = await api.get(`/year-end-closings/monthly-pnl/${selectedPeriodId.value}/status`);
+  } catch {
+    monthlyStatus.value = null;
+  }
+}
+
+watch(selectedPeriodId, () => {
+  void loadMonthlyStatus();
+});
 
 async function loadPreview() {
   annualLoading.value = true;
@@ -69,10 +92,16 @@ async function closeAnnual() {
 }
 
 async function cancelAnnual() {
-  const { value } = await ElMessageBox.prompt("请输入撤销原因", "撤销年度结转", {
-    inputPattern: /\S+/,
-    inputErrorMessage: "撤销原因不能为空",
-  });
+  let value: string;
+  try {
+    const promptRes = await ElMessageBox.prompt("请输入撤销原因", "撤销年度结转", {
+      inputPattern: /\S+/,
+      inputErrorMessage: "撤销原因不能为空",
+    });
+    value = promptRes.value;
+  } catch {
+    return;
+  }
   annualLoading.value = true;
   try {
     await api.post(`/year-end-closings/${year.value}/cancel`, { reason: value });
@@ -109,8 +138,34 @@ async function handleCloseMonthlyPnl() {
     const res = await api.post<any>("/year-end-closings/monthly-pnl", body);
     const voucherNo = res?.voucherNo || res?.voucher?.voucherNo || "已生成";
     ElMessage.success(`月度账结损益凭证生成成功：${voucherNo}`);
-    if (!monthlyResult.value) monthlyResult.value = {};
-    monthlyResult.value.pnlVoucher = voucherNo;
+    await loadMonthlyStatus();
+  } finally {
+    monthlyLoading.value = false;
+  }
+}
+
+async function handleCancelMonthlyPnl() {
+  if (!selectedPeriodId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      monthlyStatus.value && monthlyStatus.value.duplicateCount > 1
+        ? `检测到当前期间存在 ${monthlyStatus.value.duplicateCount} 张重复生成的损益结转凭证，导致借贷不平衡！确认一键全部撤销并作废吗？`
+        : "确认撤销当前会计期间的月度损益结转吗？撤销后结转凭证将被作废，损益科目发生额将恢复，您可以重新执行损益结转。",
+      "撤销月度损益结转",
+      { type: "warning", confirmButtonText: "确认撤销", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+
+  monthlyLoading.value = true;
+  try {
+    const res = await api.post<any>("/year-end-closings/monthly-pnl/cancel", {
+      periodId: selectedPeriodId.value,
+      reason: "用户手动撤销并重新结转",
+    });
+    ElMessage.success(`已成功撤销 ${res?.voidedCount ?? 1} 张结转凭证`);
+    await loadMonthlyStatus();
   } finally {
     monthlyLoading.value = false;
   }
@@ -205,13 +260,37 @@ onMounted(async () => {
                 自动扫描当期全部 5xxx/6xxx 损益类科目期末净发生额，自动生成结转凭证转入「4103 本年利润」，实现各损益科目期末余额归零。
               </p>
               <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
-                <span v-if="monthlyResult?.pnlVoucher" style="color: #67c23a; font-size: 13px;">
-                  ✓ 已生成凭证：<strong>{{ monthlyResult.pnlVoucher }}</strong>
-                </span>
-                <span v-else style="color: #909399; font-size: 13px;">尚未生成当期损益结转凭证</span>
-                <el-button type="success" plain :disabled="!selectedPeriodId || !monthlyProfitAccountId" @click="handleCloseMonthlyPnl">
-                  立即结转月度损益
-                </el-button>
+                <div>
+                  <template v-if="monthlyStatus?.hasClosed">
+                    <span style="color: #67c23a; font-size: 13px;">
+                      ✓ 已生成凭证：<strong>{{ monthlyStatus.vouchers?.map((v: any) => v.voucherNo).join('、') }}</strong>
+                    </span>
+                    <el-tag v-if="monthlyStatus.duplicateCount > 1" type="danger" size="small" style="margin-left: 8px;">
+                      ⚠️ 检测到 {{ monthlyStatus.duplicateCount }} 张重复凭证，导致借贷不平！请点击右侧撤销并重新结转
+                    </el-tag>
+                  </template>
+                  <span v-else style="color: #909399; font-size: 13px;">尚未生成当期损益结转凭证</span>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <el-button
+                    v-if="monthlyStatus?.hasClosed"
+                    type="danger"
+                    plain
+                    :loading="monthlyLoading"
+                    @click="handleCancelMonthlyPnl"
+                  >
+                    {{ monthlyStatus.duplicateCount > 1 ? '一键撤销所有重复凭证' : '撤销损益结转' }}
+                  </el-button>
+                  <el-button
+                    type="success"
+                    plain
+                    :disabled="!selectedPeriodId || !monthlyProfitAccountId || monthlyStatus?.hasClosed"
+                    :loading="monthlyLoading"
+                    @click="handleCloseMonthlyPnl"
+                  >
+                    立即结转月度损益
+                  </el-button>
+                </div>
               </div>
             </el-card>
 
