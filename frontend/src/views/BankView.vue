@@ -57,6 +57,7 @@ const quickVoucherForm = reactive({
   bankAccountId: "" as number | "",
   counterAccountId: "" as number | "",
   amount: "0.00",
+  ruleMatchedHint: "",
 });
 
 const postingLabels: Record<PostingStatus, string> = {
@@ -122,21 +123,249 @@ function viewVoucher(voucherId: number) {
   router.push({ path: "/vouchers", query: { voucherId: String(voucherId) } });
 }
 
+interface BankVoucherRule {
+  id: string;
+  keyword: string;
+  direction: "ANY" | "IN" | "OUT";
+  counterAccountId: number;
+  summaryTemplate?: string;
+  isEnabled: boolean;
+}
+
+const STORAGE_KEY_BANK_RULES = "finance_bank_voucher_custom_rules";
+
+// 内置会计智能启发式规则（开箱即用，自动识别）
+const BUILTIN_RULES = [
+  {
+    name: "银行结息 / 利息收入",
+    keywords: ["结息", "利息", "利息收入"],
+    direction: "IN" as const,
+    accountPrefix: "6603",
+    nameHints: ["利息"],
+    summary: "银行存款利息收入",
+  },
+  {
+    name: "银行手续费 / 服务费 / 年费",
+    keywords: ["服务费", "手续费", "工本费", "年费", "短信费", "网银服务", "网上企业银行服务费"],
+    direction: "OUT" as const,
+    accountPrefix: "6603",
+    nameHints: ["手续费", "服务费"],
+    summary: "银行网银服务费及手续费",
+  },
+  {
+    name: "企业实名认证 / 打款验证",
+    keywords: ["实名认证", "企业实名认证", "认证专用", "验证专用", "打款验证", "小额验证", "认证款"],
+    direction: "IN" as const,
+    accountPrefix: "6301",
+    nameHints: ["其他", "营业外"],
+    summary: "企业实名认证收入",
+  },
+  {
+    name: "税款缴纳（增值税/所得税等）",
+    keywords: ["税款", "税务", "国家金库", "增值税", "所得税", "印花税", "附加税"],
+    direction: "OUT" as const,
+    accountPrefix: "2221",
+    nameHints: ["应交", "税"],
+    summary: "缴纳税款",
+  },
+  {
+    name: "代发工资 / 员工薪酬",
+    keywords: ["代发工资", "工资", "薪资", "代发代扣", "员工薪酬"],
+    direction: "OUT" as const,
+    accountPrefix: "2211",
+    nameHints: ["工资", "薪酬"],
+    summary: "支付员工工资薪酬",
+  },
+  {
+    name: "社保 / 住房公积金",
+    keywords: ["社会保险", "社保", "住房公积金", "公积金"],
+    direction: "OUT" as const,
+    accountPrefix: "2211",
+    nameHints: ["社保", "公积金", "保险"],
+    summary: "缴纳员工社保及公积金",
+  },
+];
+
+const rulesDialogVisible = ref(false);
+const customRules = ref<BankVoucherRule[]>([]);
+const editingRule = reactive<{
+  id?: string;
+  keyword: string;
+  direction: "ANY" | "IN" | "OUT";
+  counterAccountId: number | "";
+  summaryTemplate: string;
+}>({
+  keyword: "",
+  direction: "ANY",
+  counterAccountId: "",
+  summaryTemplate: "",
+});
+const isRuleFormEditing = ref(false);
+
+function loadCustomRules() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_BANK_RULES);
+    if (raw) {
+      customRules.value = JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error("Failed to load bank voucher rules", e);
+  }
+}
+
+function saveCustomRules() {
+  localStorage.setItem(STORAGE_KEY_BANK_RULES, JSON.stringify(customRules.value));
+}
+
+function openRulesDialog() {
+  resetRuleForm();
+  rulesDialogVisible.value = true;
+}
+
+function resetRuleForm() {
+  editingRule.id = undefined;
+  editingRule.keyword = "";
+  editingRule.direction = "ANY";
+  editingRule.counterAccountId = "";
+  editingRule.summaryTemplate = "";
+  isRuleFormEditing.value = false;
+}
+
+function handleEditRule(rule: BankVoucherRule) {
+  editingRule.id = rule.id;
+  editingRule.keyword = rule.keyword;
+  editingRule.direction = rule.direction;
+  editingRule.counterAccountId = rule.counterAccountId;
+  editingRule.summaryTemplate = rule.summaryTemplate || "";
+  isRuleFormEditing.value = true;
+}
+
+function handleDeleteRule(index: number) {
+  customRules.value.splice(index, 1);
+  saveCustomRules();
+  ElMessage.success("规则已删除");
+}
+
+function handleSaveRule() {
+  if (!editingRule.keyword.trim()) {
+    ElMessage.warning("请输入匹配关键字");
+    return;
+  }
+  if (!editingRule.counterAccountId) {
+    ElMessage.warning("请选择对应业务科目");
+    return;
+  }
+
+  if (editingRule.id) {
+    const idx = customRules.value.findIndex((r) => r.id === editingRule.id);
+    if (idx !== -1) {
+      customRules.value[idx] = {
+        id: editingRule.id,
+        keyword: editingRule.keyword.trim(),
+        direction: editingRule.direction,
+        counterAccountId: Number(editingRule.counterAccountId),
+        summaryTemplate: editingRule.summaryTemplate.trim(),
+        isEnabled: true,
+      };
+    }
+  } else {
+    customRules.value.unshift({
+      id: "rule_" + Date.now(),
+      keyword: editingRule.keyword.trim(),
+      direction: editingRule.direction,
+      counterAccountId: Number(editingRule.counterAccountId),
+      summaryTemplate: editingRule.summaryTemplate.trim(),
+      isEnabled: true,
+    });
+  }
+  saveCustomRules();
+  ElMessage.success("规则已保存");
+  resetRuleForm();
+}
+
+function getAccountLabel(accountId: number) {
+  const acc = accounts.value.find((a) => a.id === accountId);
+  return acc ? `${acc.code} ${acc.name}` : `科目ID: ${accountId}`;
+}
+
+function findAccountByPrefix(prefix: string, nameHints: string[] = []): AccountOption | undefined {
+  const matched = accounts.value.filter((a) => a.code.startsWith(prefix) && a.isLeaf && a.isEnabled);
+  if (matched.length === 0) return undefined;
+  if (nameHints.length > 0) {
+    const specific = matched.find((a) => nameHints.some((hint) => a.name.includes(hint)));
+    if (specific) return specific;
+  }
+  return matched[0];
+}
+
+function matchVoucherRule(row: any, isPositive: boolean) {
+  const textPool = [
+    row.summary || "",
+    row.payerName || "",
+    row.payeeName || "",
+    row.transactionType || "",
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  // 1. 优先匹配用户自定义规则
+  for (const rule of customRules.value) {
+    if (!rule.isEnabled) continue;
+    if (rule.direction === "IN" && !isPositive) continue;
+    if (rule.direction === "OUT" && isPositive) continue;
+
+    const kw = rule.keyword.toLowerCase().trim();
+    if (kw && textPool.includes(kw)) {
+      const acc = accounts.value.find((a) => a.id === rule.counterAccountId && a.isEnabled && a.isLeaf);
+      if (acc) {
+        return {
+          accountId: acc.id,
+          summary: rule.summaryTemplate?.trim() || row.summary || (isPositive ? `收到 ${row.payerName || "款项"}` : `支付 ${row.payeeName || "款项"}`),
+          source: `自定义规则【${rule.keyword}】`,
+        };
+      }
+    }
+  }
+
+  // 2. 匹配内置常用智能规则
+  for (const builtin of BUILTIN_RULES) {
+    if (builtin.direction === "IN" && !isPositive) continue;
+    if (builtin.direction === "OUT" && isPositive) continue;
+
+    const hit = builtin.keywords.some((kw) => textPool.includes(kw.toLowerCase()));
+    if (hit) {
+      const acc = findAccountByPrefix(builtin.accountPrefix, builtin.nameHints);
+      if (acc) {
+        return {
+          accountId: acc.id,
+          summary: builtin.summary,
+          source: `系统预设【${builtin.name}】`,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 function openQuickVoucher(row: any) {
   const isPositive = Number(row.amount) >= 0;
   const absAmount = Math.abs(Number(row.amount)).toFixed(2);
   const defaultBank = accounts.value.find((a) => a.code.startsWith("1002") && a.isLeaf) || accounts.value.find((a) => a.code.startsWith("1001") && a.isLeaf);
-  const defaultCounter = isPositive
+
+  const matched = matchVoucherRule(row, isPositive);
+  const fallbackCounter = isPositive
     ? accounts.value.find((a) => a.code.startsWith("1122") || a.code.startsWith("6001"))
     : accounts.value.find((a) => a.code.startsWith("6602") || a.code.startsWith("2202"));
 
   quickVoucherForm.transactionId = row.id;
   quickVoucherForm.voucherDate = row.transactionTime ? row.transactionTime.slice(0, 10) : todayBusinessDate();
   quickVoucherForm.category = isPositive ? "RECEIPT" : "PAYMENT";
-  quickVoucherForm.summary = row.summary || (isPositive ? `收到 ${row.payerName || "银行转入款"}` : `支付 ${row.payeeName || "银行转出款"}`);
+  quickVoucherForm.summary = matched?.summary || row.summary || (isPositive ? `收到 ${row.payerName || "银行转入款"}` : `支付 ${row.payeeName || "银行转出款"}`);
   quickVoucherForm.bankAccountId = defaultBank?.id ?? "";
-  quickVoucherForm.counterAccountId = defaultCounter?.id ?? "";
+  quickVoucherForm.counterAccountId = matched?.accountId ?? fallbackCounter?.id ?? "";
   quickVoucherForm.amount = absAmount;
+  quickVoucherForm.ruleMatchedHint = matched ? matched.source : "";
   quickVoucherVisible.value = true;
 }
 
@@ -334,6 +563,7 @@ onMounted(() => {
   void restoreCmbConfig();
   void load();
   void loadAccounts();
+  loadCustomRules();
 });
 </script>
 
@@ -348,6 +578,7 @@ onMounted(() => {
         </el-radio-group>
         <template v-if="activeViewTab === 'transactions'">
           <el-button @click="exportTransactions">导出 Excel</el-button>
+          <el-button @click="openRulesDialog">智能记账规则</el-button>
           <el-button type="primary" plain @click="fetchDialogVisible = true">招商银行接口拉取</el-button>
           <el-upload
             :auto-upload="false"
@@ -550,6 +781,14 @@ onMounted(() => {
 
     <!-- 一键生成凭证对话框 -->
     <el-dialog v-model="quickVoucherVisible" title="基于银行流水生成凭证" width="560px" destroy-on-close>
+      <div v-if="quickVoucherForm.ruleMatchedHint" style="margin-bottom: 14px;">
+        <el-alert
+          :title="`已根据 ${quickVoucherForm.ruleMatchedHint} 自动匹配科目与摘要`"
+          type="success"
+          :closable="false"
+          show-icon
+        />
+      </div>
       <el-form label-width="110px">
         <el-form-item label="凭证日期" required>
           <el-date-picker v-model="quickVoucherForm.voucherDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
@@ -592,6 +831,125 @@ onMounted(() => {
       <template #footer>
         <el-button @click="quickVoucherVisible = false">取消</el-button>
         <el-button type="primary" :loading="quickVoucherSaving" @click="submitQuickVoucher">确认生成并入账</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 智能记账规则管理对话框 -->
+    <el-dialog v-model="rulesDialogVisible" title="银行流水智能记账规则" width="min(820px, 95vw)" top="8vh">
+      <div style="margin-bottom: 16px;">
+        <p style="margin: 0 0 16px; color: #64748b; font-size: 13px;">
+          设置关键字与会计科目的映射规则。认领银行流水生成凭证时，系统将自动匹配科目并智能补全摘要，无需重复手工选择。
+        </p>
+
+        <el-tabs type="border-card">
+          <el-tab-pane label="自定义规则（优先匹配）">
+            <!-- 编辑 / 添加规则表单 -->
+            <el-card shadow="never" style="background-color: #f8fafc; margin-bottom: 16px;">
+              <template #header>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-weight: 600; font-size: 14px;">{{ isRuleFormEditing ? '编辑自定义规则' : '新增自定义规则' }}</span>
+                  <el-button v-if="isRuleFormEditing" size="small" @click="resetRuleForm">取消编辑</el-button>
+                </div>
+              </template>
+              <el-form label-width="95px" size="default">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 16px;">
+                  <el-form-item label="匹配关键字" required>
+                    <el-input v-model="editingRule.keyword" placeholder="例如：阿里云 / 房租 / 微信支付" />
+                  </el-form-item>
+                  <el-form-item label="收付方向" required>
+                    <el-select v-model="editingRule.direction" style="width: 100%">
+                      <el-option label="不限方向" value="ANY" />
+                      <el-option label="仅收款 (+)" value="IN" />
+                      <el-option label="仅付款 (-)" value="OUT" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="对应业务科目" required>
+                    <el-select v-model="editingRule.counterAccountId" filterable placeholder="选择末级科目" style="width: 100%">
+                      <el-option
+                        v-for="acc in accounts"
+                        :key="acc.id"
+                        :label="`${acc.code} ${acc.name}`"
+                        :value="acc.id"
+                      />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="默认凭证摘要">
+                    <el-input v-model="editingRule.summaryTemplate" placeholder="留空则沿用原始流水摘要" />
+                  </el-form-item>
+                </div>
+                <div style="text-align: right; margin-top: 6px;">
+                  <el-button type="primary" @click="handleSaveRule">
+                    {{ isRuleFormEditing ? '更新规则' : '保存此规则' }}
+                  </el-button>
+                </div>
+              </el-form>
+            </el-card>
+
+            <!-- 自定义规则列表 -->
+            <el-table :data="customRules" border size="small" empty-text="暂无自定义规则，可在上方添加常用商户或交易关键字">
+              <el-table-column prop="keyword" label="关键字" min-width="120">
+                <template #default="{ row }">
+                  <el-tag size="small">{{ row.keyword }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="方向" width="90" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.direction === 'IN' ? 'success' : row.direction === 'OUT' ? 'danger' : 'info'">
+                    {{ row.direction === 'IN' ? '仅收款' : row.direction === 'OUT' ? '仅付款' : '不限' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="对应业务科目" min-width="180">
+                <template #default="{ row }">
+                  {{ getAccountLabel(row.counterAccountId) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="summaryTemplate" label="默认摘要" min-width="140">
+                <template #default="{ row }">
+                  {{ row.summaryTemplate || '（沿用原始流水摘要）' }}
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="120" align="center">
+                <template #default="{ row, $index }">
+                  <el-button link type="primary" size="small" @click="handleEditRule(row)">编辑</el-button>
+                  <el-button link type="danger" size="small" @click="handleDeleteRule($index)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane label="系统预设规则（已自动生效）">
+            <p style="margin: 8px 0 12px; color: #64748b; font-size: 13px;">
+              以下为内置常见业务规则。流水匹配到关键字时，系统将自动匹配对应末级科目并自动优化摘要：
+            </p>
+            <el-table :data="BUILTIN_RULES" border size="small">
+              <el-table-column prop="name" label="业务类型" width="170" />
+              <el-table-column label="匹配关键字" min-width="200">
+                <template #default="{ row }">
+                  <el-tag v-for="kw in row.keywords" :key="kw" size="small" type="info" style="margin-right: 4px; margin-bottom: 2px;">
+                    {{ kw }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="方向" width="80" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.direction === 'IN' ? 'success' : 'danger'">
+                    {{ row.direction === 'IN' ? '收款' : '付款' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="智能对应科目" width="150">
+                <template #default="{ row }">
+                  <el-tag size="small" type="success">{{ row.accountPrefix }}* 科目</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="summary" label="推荐默认摘要" min-width="160" />
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="rulesDialogVisible = false">完成</el-button>
       </template>
     </el-dialog>
   </div>
