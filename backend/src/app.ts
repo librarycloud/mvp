@@ -171,20 +171,21 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
   await app.register(fastifyCors, {
     // P1 安全修复：配置 CORS，限制允许的来源，防止跨站请求伪造
-    origin: config.nodeEnv === "production"
-      ? (origin, cb) => {
-          // 生产环境：只允许同源或配置的前端域名
-          const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map(o => o.trim()).filter(Boolean);
-          if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
-            cb(null, true);
-          } else {
-            cb(new Error("Not allowed by CORS"), false);
-          }
-        }
-      : true, // 开发环境允许所有来源
+    origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => {
+      if (config.nodeEnv !== "production") {
+        cb(null, true);
+        return;
+      }
+      const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        cb(null, true);
+      } else {
+        cb(new Error("Not allowed by CORS"), false);
+      }
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  });
+  } as any);
 
   // P1 安全修复：登录接口限流，防止暴力破解密码（每 IP 每分钟最多 10 次）
   await app.register(rateLimit, {
