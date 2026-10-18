@@ -35,7 +35,7 @@
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.2.0",
     "exceljs": "^4.4.0",
-    "fast-jwt": "^6.2.4",
+    "fast-jwt": "^6.3.5",
     "fast-xml-parser": "^5.10.1",
     "fastify": "^5.12.3",
     "jszip": "^3.10.1",
