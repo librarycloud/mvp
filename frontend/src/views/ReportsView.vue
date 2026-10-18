@@ -146,29 +146,29 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page-grid">
+  <div class="page-grid reports-page">
     <section class="page-heading">
-      <div>
+      <div class="heading-left">
         <h2>财务报表</h2>
         <p>按数据库模板从已记账凭证生成，支持月报、季报和年报。点击报表行可穿透溯源会计科目及明细账。</p>
       </div>
       <div class="toolbar">
         <el-button v-if="report" @click="exportFile('xlsx')">导出 Excel</el-button>
         <el-button v-if="report" @click="exportFile('pdf')">导出 PDF</el-button>
-        <el-select v-model="periodType" style="width: 110px" @change="changeType">
+        <el-select v-model="periodType" style="width: 85px" @change="changeType">
           <el-option label="月报" value="MONTH" />
           <el-option label="季报" value="QUARTER" />
           <el-option label="年报" value="YEAR" />
         </el-select>
-        <el-input-number v-model="year" :min="2000" :max="9999" />
-        <el-select v-if="periodType !== 'YEAR'" v-model="period" style="width: 110px">
+        <el-input-number v-model="year" :min="2000" :max="9999" controls-position="right" style="width: 110px" />
+        <el-select v-if="periodType !== 'YEAR'" v-model="period" style="width: 95px">
           <el-option v-for="n in periodOptions" :key="n" :label="periodType === 'MONTH' ? `${n}月` : `第${n}季度`" :value="n" />
         </el-select>
       </div>
     </section>
 
     <section class="report-actions">
-      <el-select v-model="templateCode" filterable placeholder="选择启用的报表模板" style="width: 300px">
+      <el-select v-model="templateCode" filterable placeholder="选择启用的报表模板" style="width: 240px">
         <el-option v-for="row in templates" :key="row.id" :label="`${row.name} V${row.version}`" :value="row.code" />
       </el-select>
       <el-button type="primary" :loading="loading" :disabled="!templateCode" @click="generateConfigured">生成所选报表</el-button>
@@ -191,7 +191,7 @@ onMounted(async () => {
               {{ balanceSheetStatus.isBalanced ? "借贷试算平衡（资产负债表已配平）" : "借贷不平衡（资产负债表存在差额）" }}
             </span>
           </template>
-          <div style="margin-top: 6px; display: flex; gap: 24px; font-size: 13px;">
+          <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 12px 24px; font-size: 13px;">
             <span>资产总计: <b>¥{{ balanceSheetStatus.totalAssets }}</b></span>
             <span>负债与所有者权益总计: <b>¥{{ balanceSheetStatus.totalLiabEquity }}</b></span>
             <span v-if="!balanceSheetStatus.isBalanced" style="color: #f56c6c;">差额: <b>¥{{ balanceSheetStatus.diff }}</b></span>
@@ -207,18 +207,18 @@ onMounted(async () => {
         style="cursor: pointer;"
         @row-click="handleLineClick"
       >
-        <el-table-column prop="reportItem.lineNumber" label="行次" width="70" />
-        <el-table-column prop="reportItem.name" label="项目" min-width="220" show-overflow-tooltip>
+        <el-table-column prop="reportItem.lineNumber" label="行次" width="60" align="center" />
+        <el-table-column prop="reportItem.name" label="项目" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <span style="color: #409eff; font-weight: 500;">{{ row.reportItem?.name }}</span>
             <span v-if="row.reportItem?.accountMappings?.length" style="margin-left: 6px; font-size: 11px; color: #909399;">
-              (含 {{ row.reportItem.accountMappings.length }} 个核算科目)
+              ({{ row.reportItem.accountMappings.length }}科目)
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="openingAmount" label="期初/上期" align="right" width="130" />
-        <el-table-column prop="currentAmount" label="本期" align="right" width="130" />
-        <el-table-column prop="closingAmount" label="期末/累计" align="right" width="130" />
+        <el-table-column prop="openingAmount" label="期初/上期" align="right" width="125" />
+        <el-table-column prop="currentAmount" label="本期" align="right" width="125" />
+        <el-table-column prop="closingAmount" label="期末/累计" align="right" width="125" />
       </el-table>
     </el-card>
 
@@ -369,3 +369,71 @@ onMounted(async () => {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.reports-page {
+  width: 100%;
+}
+
+.page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+}
+
+.heading-left {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.heading-left h2 {
+  font-size: 21px;
+  margin: 0 0 5px;
+}
+
+.heading-left p {
+  margin: 0;
+  color: #6b7280;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e3e8ed;
+  padding: 14px 18px;
+  border-radius: 4px;
+}
+
+.report-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.report-title h3 {
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .toolbar {
+    justify-content: flex-start;
+  }
+}
+</style>
