@@ -697,6 +697,7 @@ onMounted(() => {
           <el-date-picker
             v-model="filters.dateRange"
             type="daterange"
+            single-panel
             value-format="YYYY-MM-DD"
             range-separator="至"
             start-placeholder="开始日期"
@@ -772,6 +773,7 @@ onMounted(() => {
           <el-date-picker
             v-model="journalDateRange"
             type="daterange"
+            single-panel
             value-format="YYYY-MM-DD"
             range-separator="至"
             start-placeholder="开始日期"

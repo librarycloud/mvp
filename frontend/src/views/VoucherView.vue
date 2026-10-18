@@ -664,6 +664,7 @@ onUnmounted(() => {
         <el-date-picker
           v-model="dateRange"
           type="daterange"
+          single-panel
           value-format="YYYY-MM-DD"
           range-separator="至"
           start-placeholder="开始日期"

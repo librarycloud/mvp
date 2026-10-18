@@ -360,6 +360,7 @@ onMounted(async () => { await Promise.all([load(), loadProfile()]); });
         <el-date-picker
           v-model="dateRange"
           type="daterange"
+          single-panel
           value-format="YYYY-MM-DD"
           range-separator="至"
           start-placeholder="开票起始"

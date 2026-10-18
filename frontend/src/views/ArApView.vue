@@ -217,6 +217,7 @@ onMounted(async () => { await loadSupport(); await load(); });
         <el-date-picker
           v-model="statementDates"
           type="daterange"
+          single-panel
           value-format="YYYY-MM-DD"
           range-separator="至"
           start-placeholder="开始日期"
