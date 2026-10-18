@@ -97,4 +97,14 @@ export async function reportRoutes(app: FastifyInstance, options: { controller: 
     },
     handler: options.controller.drillDown,
   });
+  app.get("/:id/drill-down/:itemId", {
+    preHandler: authenticate,
+    schema: {
+      tags: ["报表"],
+      summary: "报表项目穿透下钻",
+      security: [{ bearerAuth: [] }],
+      params: Type.Object({ id: Type.Integer({ minimum: 1 }), itemId: Type.Integer({ minimum: 1 }) }),
+    },
+    handler: options.controller.drillDown,
+  });
 }

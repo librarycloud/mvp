@@ -34,6 +34,7 @@ const OFFICIAL_TEMPLATES: Record<string, { fileName: string; sheetName: string }
 
 const BALANCE_ALIASES: Record<string, string> = {
   应收票据及应收账款: "应收账款",
+  应付票据及应付账款: "应付账款",
   长期投资: "长期股权投资",
   未分配利润: "未分配利润",
   实收资本: "实收资本（或股本）",
@@ -48,6 +49,11 @@ const INCOME_ALIASES: Record<string, string> = {
   利润总额: "三、利润总额（亏损总额以“-”号填列）",
   所得税费用: "减：所得税费用",
   净利润: "四、净利润（净亏损以“-”号填列）",
+  资产减值损失: "资产减值损失（损失以“-”号填列）",
+  公允价值变动收益: "公允价值变动收益（损失以“-”号填列）",
+  投资收益: "投资收益（损失以“-”号填列）",
+  营业外收入: "加：营业外收入",
+  营业外支出: "减：营业外支出",
 };
 
 export class ReportExportService {
@@ -123,7 +129,8 @@ export class ReportExportService {
     for (const line of lines) {
       const name = INCOME_ALIASES[line.reportItem.name] ?? line.reportItem.name;
       const row = rows.get(name); if (!row) continue;
-      this.setInput(sheet, values, `C${row}`, line.currentAmount);
+      const amount = line.closingAmount !== null && line.closingAmount !== undefined ? line.closingAmount : line.currentAmount;
+      this.setInput(sheet, values, `C${row}`, amount);
       if (line.openingAmount !== null && line.openingAmount !== undefined) this.setInput(sheet, values, `D${row}`, line.openingAmount);
     }
   }

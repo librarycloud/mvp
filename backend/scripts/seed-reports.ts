@@ -37,18 +37,49 @@ async function seedTemplate(input: {
   version?: number;
 }) {
   const version = input.version ?? (input.type === "CASH_FLOW_STATEMENT" ? 2 : 1);
+  const accountCodes = [...new Set(input.items.flatMap((item) => item.mappings?.map((mapping) => mapping.accountCode) ?? []))];
+  const accounts = await prisma.account.findMany({ where: { code: { in: accountCodes }, deletedAt: null }, select: { id: true, code: true } });
+  const accountIds = new Map(accounts.map((account) => [account.code, account.id]));
   const existing = await prisma.reportTemplate.findUnique({ where: { code_version: { code: input.code, version } } });
+
   if (existing) {
     if (input.type === "CASH_FLOW_STATEMENT") {
       await prisma.reportTemplate.updateMany({ where: { code: input.code, version: { not: version }, isActive: true, deletedAt: null }, data: { isActive: false } });
       if (!existing.isActive) await prisma.reportTemplate.update({ where: { id: existing.id }, data: { isActive: true } });
     }
-    console.log(`${input.name} template already exists; no changes made.`);
+    // 同步新增的科目映射到已存在的模板项目中
+    const items = await prisma.reportItem.findMany({
+      where: { templateId: existing.id, deletedAt: null },
+      include: { accountMappings: { where: { deletedAt: null } } },
+    });
+    const itemByCode = new Map(items.map((i) => [i.itemCode, i]));
+    let addedCount = 0;
+    for (const defItem of input.items) {
+      const item = itemByCode.get(defItem.code);
+      if (!item || !defItem.mappings?.length) continue;
+      const existingAccountIds = new Set(item.accountMappings.map((m) => m.accountId));
+      for (const defMapping of defItem.mappings) {
+        const accId = accountIds.get(defMapping.accountCode);
+        if (accId && !existingAccountIds.has(accId)) {
+          await prisma.reportItemAccountMapping.create({
+            data: {
+              reportItemId: item.id,
+              accountId: accId,
+              operator: defMapping.operator ?? "ADD",
+              valueType: defMapping.valueType ?? "CLOSING_BALANCE",
+              direction: defMapping.direction ?? null,
+              includeChildren: true,
+            },
+          });
+          existingAccountIds.add(accId);
+          addedCount++;
+          console.log(`[${input.name}] 成功写入新科目映射: ${defItem.name} (${defItem.code}) -> ${defMapping.accountCode}`);
+        }
+      }
+    }
+    console.log(`${input.name} 已存在，已同步补全 ${addedCount} 条缺失的科目映射规则。`);
     return;
   }
-  const accountCodes = [...new Set(input.items.flatMap((item) => item.mappings?.map((mapping) => mapping.accountCode) ?? []))];
-  const accounts = await prisma.account.findMany({ where: { code: { in: accountCodes }, deletedAt: null }, select: { id: true, code: true } });
-  const accountIds = new Map(accounts.map((account) => [account.code, account.id]));
   const missing = accountCodes.filter((code) => !accountIds.has(code));
   if (missing.length) throw new Error(`Missing standard accounts: ${missing.join(", ")}`);
   await prisma.$transaction(async (tx) => {

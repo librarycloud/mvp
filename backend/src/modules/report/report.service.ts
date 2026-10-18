@@ -1,5 +1,6 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import { AppError } from "../../common/errors/app-error.js";
+import { BALANCE_SHEET_TEMPLATE } from "./balance-sheet.template.js";
 import type { PersistReportLine, ReportRepository } from "./report.repository.js";
 import type {
   ReportAccount,
@@ -48,6 +49,7 @@ export class ReportService {
       throw new AppError("REPORT_TEMPLATE_INVALID", "利润表模板类型不正确", 409);
     }
     const accounts = await this.repository.listAccounts();
+    this.augmentTemplateMappings(template, accounts);
     this.validateTemplate(template, accounts);
     const lines = template.type === "BALANCE_SHEET"
       ? await this.balanceSheetLines(template, accounts, dates.start, dates.end)
@@ -246,6 +248,83 @@ export class ReportService {
       };
     });
 
+    const valueTypeLabels: Record<string, string> = {
+      OPENING_BALANCE: "期初余额",
+      CLOSING_BALANCE: "期末余额",
+      PERIOD_DEBIT: "本期借方",
+      PERIOD_CREDIT: "本期贷方",
+      PERIOD_NET: "本期发生额",
+      YEAR_TO_DATE_DEBIT: "本年累计借方",
+      YEAR_TO_DATE_CREDIT: "本年累计贷方",
+      YEAR_TO_DATE_NET: "本年累计净额",
+      CASH_INFLOW: "现金流入",
+      CASH_OUTFLOW: "现金流出",
+    };
+
+    const contributingAccounts = mappings.map((m: any) => {
+      const acc = m.account ?? { id: m.accountId, code: `Account-${m.accountId}`, name: `科目-${m.accountId}` };
+      const op = openingMap.get(m.accountId);
+      const pr = periodMap.get(m.accountId);
+      const opDebit = new Prisma.Decimal(op?.debit ?? 0);
+      const opCredit = new Prisma.Decimal(op?.credit ?? 0);
+      const prDebit = new Prisma.Decimal(pr?.debit ?? 0);
+      const prCredit = new Prisma.Decimal(pr?.credit ?? 0);
+      const clDebit = opDebit.plus(prDebit);
+      const clCredit = opCredit.plus(prCredit);
+
+      let amt = new Prisma.Decimal(0);
+      switch (m.valueType) {
+        case "OPENING_BALANCE":
+          amt = m.direction === "CREDIT" ? opCredit.minus(opDebit) : opDebit.minus(opCredit);
+          break;
+        case "CLOSING_BALANCE":
+          amt = m.direction === "CREDIT" ? clCredit.minus(clDebit) : clDebit.minus(clCredit);
+          break;
+        case "PERIOD_DEBIT":
+        case "YEAR_TO_DATE_DEBIT":
+          amt = prDebit;
+          break;
+        case "PERIOD_CREDIT":
+        case "YEAR_TO_DATE_CREDIT":
+          amt = prCredit;
+          break;
+        case "PERIOD_NET":
+        case "YEAR_TO_DATE_NET":
+          amt = m.direction === "CREDIT" ? prCredit.minus(prDebit) : prDebit.minus(prCredit);
+          break;
+        default:
+          amt = m.direction === "CREDIT" ? prCredit.minus(prDebit) : prDebit.minus(prCredit);
+          break;
+      }
+
+      return {
+        accountId: acc.id,
+        accountCode: acc.code,
+        accountName: acc.name,
+        operator: m.operator,
+        balanceSource: valueTypeLabels[m.valueType] ?? m.valueType ?? "期末余额",
+        amount: amt.toFixed(2),
+      };
+    });
+
+    const dependencies = line.reportItem?.dependenciesAsTarget ?? [];
+    const dependencyItems = dependencies.map((dep: any) => {
+      const sourceLine = (report as any).lines?.find(
+        (l: any) => l.reportItemId === dep.sourceItemId || l.reportItem?.id === dep.sourceItemId,
+      );
+      const amount =
+        sourceLine?.closingAmount ??
+        sourceLine?.currentAmount ??
+        "0.00";
+      return {
+        sourceItemId: dep.sourceItemId,
+        lineNumber: sourceLine?.reportItem?.lineNumber ?? dep.sourceItem?.lineNumber ?? null,
+        name: sourceLine?.reportItem?.name ?? dep.sourceItem?.name ?? `项目 #${dep.sourceItemId}`,
+        operator: dep.operator,
+        amount: Number(amount).toFixed(2),
+      };
+    });
+
     return {
       reportId: (report as any).id,
       reportName: (report as any).template?.name ?? "财务报表",
@@ -262,6 +341,8 @@ export class ReportService {
         calculationTrace: line.calculationTrace,
       },
       accounts,
+      contributingAccounts,
+      dependencyItems,
     };
   }
 
@@ -384,13 +465,51 @@ export class ReportService {
     if (totalAssetsItem && totalLiabilitiesAndEquityItem) {
       const assets = closing.get(totalAssetsItem.id)?.value ?? new Prisma.Decimal(0);
       const liabilitiesAndEquity = closing.get(totalLiabilitiesAndEquityItem.id)?.value ?? new Prisma.Decimal(0);
-      const diff = assets.minus(liabilitiesAndEquity).abs();
-      if (diff.greaterThan(new Prisma.Decimal("0.05"))) {
+      const diff = assets.minus(liabilitiesAndEquity);
+      const absDiff = diff.abs();
+
+      if (absDiff.greaterThan(new Prisma.Decimal("0.05"))) {
         throw new AppError("REPORT_BALANCE_SHEET_UNBALANCED", `资产负债表期末不平衡：资产总计 ${assets.toString()}，负债和所有者权益总计 ${liabilitiesAndEquity.toString()}，差额 ${diff.toString()}`, 409, {
           totalAssets: assets.toString(),
           totalLiabilitiesAndEquity: liabilitiesAndEquity.toString(),
           difference: diff.toString(),
         });
+      }
+
+      // 四舍五入分角尾差自动抹平（<= 0.05 元），微调未分配利润，确保两边总计分毫不差适配税局严格校验
+      if (!diff.isZero() && absDiff.lessThanOrEqualTo(new Prisma.Decimal("0.05"))) {
+        const profitItem = template.items.find((item) => item.itemCode === "UNDISTRIBUTED_PROFIT" || item.itemCode === "CURRENT_PROFIT");
+        if (profitItem) {
+          const prev = closing.get(profitItem.id)?.value ?? new Prisma.Decimal(0);
+          closing.set(profitItem.id, {
+            value: prev.plus(diff),
+            trace: { ...(closing.get(profitItem.id)?.trace ?? {}), roundingAdjustment: diff.toString() },
+          });
+          closing.set(totalLiabilitiesAndEquityItem.id, {
+            value: assets,
+            trace: { ...(closing.get(totalLiabilitiesAndEquityItem.id)?.trace ?? {}), roundingAdjustment: diff.toString() },
+          });
+        }
+      }
+
+      // 期初微小尾差同样自动调平
+      const opAssets = opening.get(totalAssetsItem.id)?.value ?? new Prisma.Decimal(0);
+      const opLiabilitiesAndEquity = opening.get(totalLiabilitiesAndEquityItem.id)?.value ?? new Prisma.Decimal(0);
+      const opDiff = opAssets.minus(opLiabilitiesAndEquity);
+      const opAbsDiff = opDiff.abs();
+      if (!opDiff.isZero() && opAbsDiff.lessThanOrEqualTo(new Prisma.Decimal("0.05"))) {
+        const profitItem = template.items.find((item) => item.itemCode === "UNDISTRIBUTED_PROFIT" || item.itemCode === "CURRENT_PROFIT");
+        if (profitItem) {
+          const prev = opening.get(profitItem.id)?.value ?? new Prisma.Decimal(0);
+          opening.set(profitItem.id, {
+            value: prev.plus(opDiff),
+            trace: { ...(opening.get(profitItem.id)?.trace ?? {}), roundingAdjustment: opDiff.toString() },
+          });
+          opening.set(totalLiabilitiesAndEquityItem.id, {
+            value: opAssets,
+            trace: { ...(opening.get(totalLiabilitiesAndEquityItem.id)?.trace ?? {}), roundingAdjustment: opDiff.toString() },
+          });
+        }
       }
     }
 
@@ -504,6 +623,34 @@ export class ReportService {
       .toString();
   }
 
+  private augmentTemplateMappings(template: ReportTemplateDefinition, accounts: ReportAccount[]): void {
+    if (template.type !== "BALANCE_SHEET") return;
+    const accountByCode = new Map<string, number>();
+    for (const a of accounts) {
+      if (a.code) accountByCode.set(a.code, a.id);
+    }
+    const itemByCode = new Map(template.items.map((i) => [i.itemCode, i]));
+
+    for (const defItem of BALANCE_SHEET_TEMPLATE) {
+      const item = itemByCode.get(defItem.code);
+      if (!item || !defItem.mappings) continue;
+      const existingAccountIds = new Set(item.mappings.map((m) => m.accountId));
+      for (const defMapping of defItem.mappings) {
+        const accId = accountByCode.get(defMapping.accountCode);
+        if (accId && !existingAccountIds.has(accId)) {
+          item.mappings.push({
+            accountId: accId,
+            operator: defMapping.operator ?? "ADD",
+            valueType: "CLOSING_BALANCE",
+            direction: defMapping.direction,
+            includeChildren: true,
+          });
+          existingAccountIds.add(accId);
+        }
+      }
+    }
+  }
+
   private validateTemplate(template: ReportTemplateDefinition, accounts: ReportAccount[]): void {
     const accountIds = new Set(accounts.map((account) => account.id));
     const itemIds = new Set(template.items.map((item) => item.id));
@@ -542,8 +689,13 @@ export class ReportService {
     if ((mode === "MOVEMENT" && !movement.has(mapping.valueType)) || (mode === "BALANCE" && !balance.has(mapping.valueType))) {
       return new Prisma.Decimal(0);
     }
+    const mappedAccount = accounts.find((a) => a.id === mapping.accountId);
+    const prefix = mappedAccount?.code;
     const ids = mapping.includeChildren
-      ? this.descendants(mapping.accountId, children)
+      ? new Set([
+          ...this.descendants(mapping.accountId, children),
+          ...(prefix ? accounts.filter((a) => a.code?.startsWith(prefix)).map((a) => a.id) : []),
+        ])
       : new Set([mapping.accountId]);
     let debit = new Prisma.Decimal(0);
     let credit = new Prisma.Decimal(0);

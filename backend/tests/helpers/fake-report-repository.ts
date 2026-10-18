@@ -56,6 +56,10 @@ export class FakeReportRepository implements ReportRepository {
             ...m,
             account: { id: m.accountId, code: String(m.accountId), name: `科目${m.accountId}` },
           })),
+          dependenciesAsTarget: this.template!.items[index]!.dependencies.map((d) => ({
+            ...d,
+            sourceItem: this.template!.items.find((it) => it.id === d.sourceItemId),
+          })),
         },
       })),
     };

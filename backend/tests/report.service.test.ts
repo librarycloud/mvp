@@ -341,5 +341,32 @@ describe("ReportService", () => {
       operator: "ADD",
       valueType: "PERIOD_CREDIT",
     });
+    expect(drill.contributingAccounts.length).toBe(1);
+    expect(drill.contributingAccounts[0]).toMatchObject({
+      accountId: 101,
+      accountCode: "101",
+      accountName: "科目101",
+      operator: "ADD",
+      balanceSource: "本期贷方",
+      amount: "100.00",
+    });
+
+    const drillFormula = await service.drillDown(201, 13);
+    expect(drillFormula.item.itemCode).toBe("PROFIT");
+    expect(drillFormula.dependencyItems.length).toBe(2);
+    expect(drillFormula.dependencyItems[0]).toMatchObject({
+      sourceItemId: 11,
+      lineNumber: 1,
+      name: "收入",
+      operator: "ADD",
+      amount: "300.00",
+    });
+    expect(drillFormula.dependencyItems[1]).toMatchObject({
+      sourceItemId: 12,
+      lineNumber: 2,
+      name: "成本",
+      operator: "SUBTRACT",
+      amount: "120.00",
+    });
   });
 });

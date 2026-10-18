@@ -89,4 +89,42 @@ describe("report API", () => {
     });
     expect(response.statusCode).toBe(201);
   });
+
+  it("supports report item drill-down via both /reports/:id/drill-down/:itemId and /reports/:id/items/:itemId/drill-down", async () => {
+    const authRepository = new FakeAuthRepository();
+    authRepository.users.push({
+      id: 1, username: "user", displayName: "普通用户",
+      passwordHash: await bcrypt.hash("correct-password", 4), role: "FINANCE_MANAGER", status: 0,
+    });
+    const reportRepository = new FakeReportRepository();
+    const app = await buildApp({ config, authRepository, reportRepository, logger: false });
+    apps.push(app);
+    const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username: "user", password: "correct-password" } });
+    const token = login.json().data.accessToken as string;
+
+    await app.inject({
+      method: "POST", url: "/api/v1/reports/income-statement/generate",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { periodType: "MONTH", fiscalYear: 2026, period: 7 },
+    });
+
+    const res1 = await app.inject({
+      method: "GET", url: "/api/v1/reports/201/drill-down/11",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res1.statusCode).toBe(200);
+    const body1 = res1.json();
+    expect(body1.success).toBe(true);
+    expect(body1.data.item.id).toBe(11);
+    expect(body1.data.contributingAccounts.length).toBeGreaterThan(0);
+
+    const res2 = await app.inject({
+      method: "GET", url: "/api/v1/reports/201/items/11/drill-down",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res2.statusCode).toBe(200);
+    const body2 = res2.json();
+    expect(body2.success).toBe(true);
+    expect(body2.data.item.id).toBe(11);
+  });
 });
