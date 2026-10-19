@@ -242,11 +242,17 @@ async function uploadDetailAttachment(event: Event) {
   await loadAttachments(active.value.id);
 }
 async function reject(row: any) {
-  const result = await ElMessageBox.prompt("请输入驳回原因，可留空", "驳回报销", { inputType: "textarea" });
+  let result: any;
+  try {
+    result = await ElMessageBox.prompt("请输入驳回原因，可留空", "驳回报销", { inputType: "textarea" });
+  } catch { return; } // 用户点取消
   await transition(row, "reject", "报销单已驳回", { reason: result.value });
 }
 async function cancelPayment(row: any) {
-  const result = await ElMessageBox.prompt("请输入撤销付款原因", "撤销报销付款", { inputType: "textarea", inputValidator: value => Boolean(value.trim()) || "撤销原因不能为空" });
+  let result: any;
+  try {
+    result = await ElMessageBox.prompt("请输入撤销付款原因", "撤销报销付款", { inputType: "textarea", inputValidator: value => Boolean(value.trim()) || "撤销原因不能为空" });
+  } catch { return; } // 用户点取消
   await transition(row, "cancel-payment", "报销付款已撤销", { reason: result.value });
 }
 async function openPay(row: any) { active.value = row; Object.assign(payForm, { paymentDate: todayBusinessDate(), expenseAccountId: "", inputTaxAccountId: "", paymentAccountId: "", bankTransactionId: "", remark: "" }); availableBankTransactions.value = await api.get<any[]>(`/reimbursements/${row.id}/available-bank-transactions`); payVisible.value = true; }

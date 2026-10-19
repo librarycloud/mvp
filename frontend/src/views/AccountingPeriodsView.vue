@@ -52,12 +52,16 @@ async function updatePeriod() {
 async function closePeriod(row: Period) {
   await inspect(row);
   if (!checklist.value.ready) return ElMessage.warning('月结检查存在阻断项，请先处理');
-  await ElMessageBox.confirm(`确认关闭 ${row.periodCode}？关闭后该期间凭证不能再新增、修改、删除或审核。`, '月末关账', { type: 'warning' });
+  try {
+    await ElMessageBox.confirm(`确认关闭 ${row.periodCode}？关闭后该期间凭证不能再新增、修改、删除或审核。`, '月末关账', { type: 'warning' });
+  } catch { return; }
   await api.post(`/accounting-periods/${row.id}/close`); checklistVisible.value = false; ElMessage.success('已关账'); await load();
 }
 async function inspect(row: Period) { checklistPeriod.value = row; checklist.value = await api.get(`/accounting-periods/${row.id}/close-checklist`); checklistVisible.value = true; }
 async function reopen(row: Period) {
-  await ElMessageBox.confirm(`确认反关账 ${row.periodCode}？`, '反关账', { type: 'warning' });
+  try {
+    await ElMessageBox.confirm(`确认反关账 ${row.periodCode}？`, '反关账', { type: 'warning' });
+  } catch { return; }
   await api.post(`/accounting-periods/${row.id}/reopen`); ElMessage.success('已反关账'); await load();
 }
 async function loadSuiteStatus() {

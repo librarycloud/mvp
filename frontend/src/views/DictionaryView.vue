@@ -109,7 +109,9 @@ async function toggleItem(row: any) {
 }
 
 async function removeItem(row: any) {
-  await ElMessageBox.confirm(`删除字典项 ${row.code}？`, "删除字典项", { type: "warning" });
+  try {
+    await ElMessageBox.confirm(`删除字典项 ${row.code}？`, "删除字典项", { type: "warning" });
+  } catch { return; }
   await api.delete(`/dictionary/items/${row.id}`);
   const categoryCode = selected.value.code;
   await load();
