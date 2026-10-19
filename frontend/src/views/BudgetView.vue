@@ -11,7 +11,7 @@ function openPlan() { form.value = { fiscalYear: new Date().getFullYear(), name:
 function openLine(plan: any) { active.value = plan; line.value = { expenseType: "", department: "", amount: "" }; lineDialog.value = true; }
 async function savePlan() { await api.post("/budgets", form.value); dialog.value = false; await load(); ElMessage.success("预算计划已创建"); }
 async function saveLine() { await api.post(`/budgets/${active.value.id}/lines`, line.value); lineDialog.value = false; await load(); ElMessage.success("预算额度已添加"); }
-async function removeLine(row: any) { await ElMessageBox.confirm("确认删除此预算额度？", "删除额度"); await api.delete(`/budgets/lines/${row.id}`); await load(); }
+async function removeLine(row: any) { try { await ElMessageBox.confirm("确认删除此预算额度？", "删除额度"); } catch { return; } await api.delete(`/budgets/lines/${row.id}`); await load(); }
 onMounted(load);
 </script>
 <template>
