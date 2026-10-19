@@ -393,6 +393,7 @@ export class TaxService {
     ];
 
     let totalProfit = ZERO;
+    const ytdStart = new Date(Date.UTC(end.getUTCFullYear(), 0, 1));
     if (typeof (this.prisma as any).voucherEntry?.groupBy === "function") {
       try {
         const pnlEntries = await (this.prisma as any).voucherEntry.groupBy({
@@ -400,7 +401,7 @@ export class TaxService {
           where: {
             deletedAt: null,
             voucher: {
-              postingDate: { gte: start, lte: end },
+              postingDate: { gte: ytdStart, lte: end },
               status: VOUCHER_STATUS.POSTED,
               deletedAt: null,
             },
@@ -424,7 +425,7 @@ export class TaxService {
       : taxableProfit.mul("0.25").toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 
     return [
-      { lineCode: "PROFIT_TOTAL", lineName: "利润总额（损益科目本期累计）", calculated: totalProfit },
+      { lineCode: "PROFIT_TOTAL", lineName: "利润总额（本年累计）", calculated: totalProfit },
       { lineCode: "TAXABLE_INCOME", lineName: "应纳税所得额", calculated: taxableProfit },
       { lineCode: "TAX_RATE", lineName: isSmall ? "适用征收率（小型微利企业优惠 5%）" : "法定税率（25%）", calculated: isSmall ? new Prisma.Decimal("0.05") : new Prisma.Decimal("0.25") },
       { lineCode: "PAYABLE", lineName: "应缴企业所得税", calculated: taxPayable },
