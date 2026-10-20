@@ -1,4 +1,4 @@
-import { Prisma, type PrismaClient } from "../../generated/prisma/client.js";
+import { Prisma, type PrismaClient, type ReportType } from "../../generated/prisma/client.js";
 import { AppError } from "../../common/errors/app-error.js";
 import { FIXED_ASSET_STATUS, VOUCHER_STATUS } from "../../common/status-codes.js";
 import type { AccountingPeriodRecord } from "./accounting-period.types.js";
@@ -36,7 +36,9 @@ export class PrismaPeriodCloseChecker implements AccountingPeriodCloseChecker {
       this.prisma.accountingPeriod?.findFirst ? this.prisma.accountingPeriod.findFirst({ where: { deletedAt: null, status: 0, OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }] }, orderBy: [{ year: "asc" }, { month: "asc" }], select: { periodCode: true } }) : Promise.resolve(null),
     ]);
     const debit = totals._sum.debitAmount ?? ZERO; const credit = totals._sum.creditAmount ?? ZERO;
+    const requiredReportTypes: ReportType[] = ["BALANCE_SHEET", "INCOME_STATEMENT", "CASH_FLOW_STATEMENT"];
     const reportTypes = new Set(reports.map(row => row.template.type));
+    const missingReportTypes = requiredReportTypes.filter(type => !reportTypes.has(type));
     const incompleteReconciliations = reconciliations.filter(row => row.status !== 1).length;
     const depreciableAssets = assets.filter(asset => asset.accumulatedDepreciation.lessThan(asset.originalValue.minus(asset.residualValue)));
     const postedDepreciation = depreciableAssets.filter(asset => asset.depreciationRecords.some(record => record.status === VOUCHER_STATUS.POSTED)).length;
@@ -60,7 +62,7 @@ export class PrismaPeriodCloseChecker implements AccountingPeriodCloseChecker {
       this.item("DEPRECIATION", "固定资产折旧", missingDepreciation ? "BLOCK" : "PASS", missingDepreciation, missingDepreciation ? `仍有 ${missingDepreciation} 项应计提资产未计提折旧` : "本期折旧已完成", "/depreciation"),
       this.item("SALARY", "工资计提", salaries < employees ? "BLOCK" : "PASS", Math.max(0, employees - salaries), salaries < employees ? `仍有 ${employees - salaries} 名在职员工未生成工资` : "本期工资已完成", "/salaries"),
       this.item("REIMBURSEMENT", "待付款报销", reimbursements ? "WARN" : "PASS", reimbursements, reimbursements ? `有 ${reimbursements} 张已审批报销单尚未付款` : "没有待付款报销", "/reimbursements"),
-      this.item("REPORTS", "月度财务报表", reportTypes.size >= 3 ? "PASS" : "BLOCK", Math.max(0, 3 - reportTypes.size), reportTypes.size >= 3 ? "资产负债表、利润表、现金流量表已生成" : `三张主表尚缺 ${3 - reportTypes.size} 张`, "/reports"),
+      this.item("REPORTS", "月度财务报表", missingReportTypes.length === 0 ? "PASS" : "BLOCK", missingReportTypes.length, missingReportTypes.length === 0 ? "资产负债表、利润表、现金流量表已生成" : `尚缺：${missingReportTypes.join("、")}`, "/reports"),
     ];
 
     return { ready: checks.every(item => item.level !== "BLOCK"), checks };

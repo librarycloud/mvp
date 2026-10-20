@@ -56,24 +56,29 @@ async function seedTemplate(input: {
     let addedCount = 0;
     for (const defItem of input.items) {
       const item = itemByCode.get(defItem.code);
-      if (!item || !defItem.mappings?.length) continue;
-      const existingAccountIds = new Set(item.accountMappings.map((m) => m.accountId));
-      for (const defMapping of defItem.mappings) {
-        const accId = accountIds.get(defMapping.accountCode);
-        if (accId && !existingAccountIds.has(accId)) {
-          await prisma.reportItemAccountMapping.create({
-            data: {
-              reportItemId: item.id,
-              accountId: accId,
-              operator: defMapping.operator ?? "ADD",
-              valueType: defMapping.valueType ?? "CLOSING_BALANCE",
-              direction: defMapping.direction ?? null,
-              includeChildren: true,
-            },
-          });
-          existingAccountIds.add(accId);
-          addedCount++;
-          console.log(`[${input.name}] 成功写入新科目映射: ${defItem.name} (${defItem.code}) -> ${defMapping.accountCode}`);
+      if (!item) continue;
+      if (input.type === "EQUITY_CHANGE_STATEMENT" && item.lineNumber !== defItem.lineNumber) {
+        await prisma.reportItem.update({ where: { id: item.id }, data: { lineNumber: defItem.lineNumber } });
+      }
+      if (defItem.mappings?.length) {
+        const existingAccountIds = new Set(item.accountMappings.map((m) => m.accountId));
+        for (const defMapping of defItem.mappings) {
+          const accId = accountIds.get(defMapping.accountCode);
+          if (accId && !existingAccountIds.has(accId)) {
+            await prisma.reportItemAccountMapping.create({
+              data: {
+                reportItemId: item.id,
+                accountId: accId,
+                operator: defMapping.operator ?? "ADD",
+                valueType: defMapping.valueType ?? "CLOSING_BALANCE",
+                direction: defMapping.direction ?? null,
+                includeChildren: true,
+              },
+            });
+            existingAccountIds.add(accId);
+            addedCount++;
+            console.log(`[${input.name}] 成功写入新科目映射: ${defItem.name} (${defItem.code}) -> ${defMapping.accountCode}`);
+          }
         }
       }
     }

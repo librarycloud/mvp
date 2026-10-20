@@ -36,6 +36,8 @@ async function openIndirectReport() {
 }
 
 const periodOptions = computed(() => (periodType.value === "MONTH" ? 12 : periodType.value === "QUARTER" ? 4 : 0));
+const reportType = computed(() => report.value?.template?.type ?? "");
+const hasComparativePeriods = computed(() => ["INCOME_STATEMENT", "CASH_FLOW_STATEMENT"].includes(reportType.value));
 function changeType() {
   period.value = 1;
 }
@@ -76,6 +78,17 @@ async function open(row: any) {
 
 function exportFile(format: "xlsx" | "pdf") {
   if (report.value) return api.download(`/reports/${report.value.id}/export.${format}`, `${report.value.template.name}-${String(report.value.periodStart).slice(0, 10)}.${format}`);
+}
+
+const equityExporting = ref(false);
+async function exportEquityChangeStatement() {
+  equityExporting.value = true;
+  try {
+    await generate("equity-change-statement");
+    await exportFile("xlsx");
+  } finally {
+    equityExporting.value = false;
+  }
 }
 
 const drillDownLoading = ref(false);
@@ -153,6 +166,7 @@ onMounted(async () => {
         <p>按数据库模板从已记账凭证生成，支持月报、季报和年报。点击报表行可穿透溯源会计科目及明细账。</p>
       </div>
       <div class="toolbar">
+        <el-button :loading="equityExporting || loading" @click="exportEquityChangeStatement">导出所有者权益变动表</el-button>
         <el-button v-if="report" @click="exportFile('xlsx')">导出 Excel</el-button>
         <el-button v-if="report" @click="exportFile('pdf')">导出 PDF</el-button>
         <el-select v-model="periodType" style="width: 85px" @change="changeType">
@@ -216,9 +230,12 @@ onMounted(async () => {
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="openingAmount" label="期初/上期" align="right" width="125" />
-        <el-table-column prop="currentAmount" label="本期" align="right" width="125" />
-        <el-table-column prop="closingAmount" label="期末/累计" align="right" width="125" />
+        <el-table-column v-if="reportType === 'BALANCE_SHEET'" prop="openingAmount" label="上年年末" align="right" width="125" />
+        <el-table-column v-if="hasComparativePeriods" prop="currentAmount" label="所选期间" align="right" width="125" />
+        <el-table-column v-if="hasComparativePeriods" prop="yearToDateAmount" label="本年累计" align="right" width="125" />
+        <el-table-column v-if="hasComparativePeriods" prop="priorYearToDateAmount" label="上年同期累计" align="right" width="140" />
+        <el-table-column v-if="reportType === 'BALANCE_SHEET'" prop="closingAmount" label="期末" align="right" width="125" />
+        <el-table-column v-if="reportType === 'EQUITY_CHANGE_STATEMENT'" prop="currentAmount" label="项目金额" align="right" width="125" />
       </el-table>
     </el-card>
 
@@ -229,9 +246,12 @@ onMounted(async () => {
             行次 {{ selectedReportLine.reportItem?.lineNumber }}：{{ selectedReportLine.reportItem?.name }}
           </h4>
           <div style="display: flex; gap: 16px; font-size: 13px; color: #606266;">
-            <span>期初: <b>¥{{ selectedReportLine.openingAmount }}</b></span>
-            <span>本期: <b>¥{{ selectedReportLine.currentAmount }}</b></span>
-            <span>期末: <b>¥{{ selectedReportLine.closingAmount }}</b></span>
+            <span v-if="reportType === 'BALANCE_SHEET'">上年年末: <b>¥{{ selectedReportLine.openingAmount }}</b></span>
+            <span v-if="reportType === 'BALANCE_SHEET'">期末: <b>¥{{ selectedReportLine.closingAmount }}</b></span>
+            <span v-if="reportType === 'INCOME_STATEMENT' || reportType === 'CASH_FLOW_STATEMENT'">所选期间: <b>¥{{ selectedReportLine.currentAmount }}</b></span>
+            <span v-if="hasComparativePeriods">本年累计: <b>¥{{ selectedReportLine.yearToDateAmount }}</b></span>
+            <span v-if="hasComparativePeriods">上年同期累计: <b>¥{{ selectedReportLine.priorYearToDateAmount }}</b></span>
+            <span v-if="reportType === 'EQUITY_CHANGE_STATEMENT'">项目金额: <b>¥{{ selectedReportLine.currentAmount }}</b></span>
           </div>
         </div>
 

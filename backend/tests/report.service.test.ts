@@ -11,7 +11,7 @@ describe("ReportService", () => {
     );
     expect(result).toMatchObject({ id: 201, periodType: "MONTH" });
     const profit = repository.saved!.lines.find((line) => line.reportItemId === 13);
-    expect(profit).toMatchObject({ currentAmount: "60", closingAmount: "180" });
+    expect(profit).toMatchObject({ currentAmount: "60", yearToDateAmount: "180", priorYearToDateAmount: "160", closingAmount: "180" });
   });
 
   it("stores generated report amounts rounded to two decimal places", async () => {
@@ -54,10 +54,10 @@ describe("ReportService", () => {
     const yearStart = new Date(2025, 11, 29);
     const monthStart = new Date(2026, 5, 26);
     const monthEnd = new Date(2026, 6, 25, 23, 59, 59, 999);
-    repository.listAccountingPeriods = async () => [
+    repository.listAccountingPeriods = async (fiscalYear) => fiscalYear === 2026 ? [
       { year: 2026, month: 1, startDate: yearStart, endDate: new Date(2026, 0, 25, 23, 59, 59, 999) },
       { year: 2026, month: 7, startDate: monthStart, endDate: monthEnd },
-    ];
+    ] : [];
     const ranges: Array<[Date, Date]> = [];
     repository.aggregateEntries = async (start, end) => {
       ranges.push([start, end]);
@@ -159,8 +159,8 @@ describe("ReportService", () => {
     );
     const asset = repository.saved!.lines.find((line) => line.reportItemId === 31);
     const liability = repository.saved!.lines.find((line) => line.reportItemId === 32);
-    expect(asset).toMatchObject({ openingAmount: "100", currentAmount: null, closingAmount: "150" });
-    expect(liability).toMatchObject({ openingAmount: "100", closingAmount: "150" });
+    expect(asset).toMatchObject({ openingAmount: "150", currentAmount: null, closingAmount: "150" });
+    expect(liability).toMatchObject({ openingAmount: "150", closingAmount: "150" });
   });
 
   it("uses configured balance and movement mappings for indirect cash-flow columns", async () => {
@@ -235,7 +235,7 @@ describe("ReportService", () => {
       1,
     );
 
-    expect(repository.saved!.lines.map((line) => line.currentAmount)).toEqual(["100", "15", "80", "10"]);
+    expect(repository.saved!.lines.map((line) => line.currentAmount)).toEqual(["80", "15", "80", "10"]);
   });
 
   it("classifies direct-method cash flows from voucher counterparties", async () => {
@@ -254,14 +254,24 @@ describe("ReportService", () => {
       ],
     };
     repository.accounts = [{ id: 101, parentId: null, normalDirection: "CREDIT" }, { id: 102, parentId: null, normalDirection: "CREDIT" }, { id: 103, parentId: null, normalDirection: "DEBIT" }];
-    repository.aggregateEntries = async (start, end) => [{ accountId: 103, debit: start.getFullYear() === 1900 ? (end.getDate() > 30 ? "130" : "100") : "130", credit: "0" }];
-    repository.aggregateCashCounterparties = async () => [{ accountId: 101, inflow: "100", outflow: "0" }, { accountId: 102, inflow: "0", outflow: "70" }];
+    repository.aggregateEntries = async (start, end) => {
+      if (start.getFullYear() !== 1900) return [{ accountId: 103, debit: "30", credit: "0" }];
+      const balance = end < new Date(2025, 0, 1)
+        ? "50"
+        : end.getFullYear() === 2025 || (end.getFullYear() === 2026 && end.getMonth() < 6)
+          ? "80"
+          : "110";
+      return [{ accountId: 103, debit: balance, credit: "0" }];
+    };
+    repository.aggregateCashCounterparties = async (start) => start.getFullYear() === 2025
+      ? [{ accountId: 101, inflow: "90", outflow: "0" }, { accountId: 102, inflow: "0", outflow: "60" }]
+      : [{ accountId: 101, inflow: "100", outflow: "0" }, { accountId: 102, inflow: "0", outflow: "70" }];
 
     await new ReportService(repository).generateCashFlowStatement({ periodType: "MONTH", fiscalYear: 2026, period: 7 }, 1);
 
-    expect(repository.saved!.lines.find((line) => line.reportItemId === 91)).toMatchObject({ currentAmount: "100" });
-    expect(repository.saved!.lines.find((line) => line.reportItemId === 92)).toMatchObject({ currentAmount: "70" });
-    expect(repository.saved!.lines.find((line) => line.reportItemId === 96)).toMatchObject({ currentAmount: "30" });
+    expect(repository.saved!.lines.find((line) => line.reportItemId === 91)).toMatchObject({ currentAmount: "100", yearToDateAmount: "100", priorYearToDateAmount: "90" });
+    expect(repository.saved!.lines.find((line) => line.reportItemId === 92)).toMatchObject({ currentAmount: "70", yearToDateAmount: "70", priorYearToDateAmount: "60" });
+    expect(repository.saved!.lines.find((line) => line.reportItemId === 96)).toMatchObject({ currentAmount: "30", yearToDateAmount: "30", priorYearToDateAmount: "30" });
   });
 
   it("dynamically balances balance sheet under statement-method by adding unclosed profit to CURRENT_PROFIT", async () => {

@@ -33,6 +33,9 @@ export class FakeReportRepository implements ReportRepository {
   }
   async listAccounts() { return this.accounts; }
   async aggregateEntries(startDate: Date, _endDate: Date): Promise<ReportAccountTotal[]> {
+    if (startDate.getFullYear() === 2025) {
+      return [{ accountId: 101, debit: "0", credit: "220" }, { accountId: 102, debit: "60", credit: "0" }];
+    }
     return startDate.getMonth() === 0
       ? [{ accountId: 101, debit: "0", credit: "300" }, { accountId: 102, debit: "120", credit: "0" }]
       : [{ accountId: 101, debit: "0", credit: "100" }, { accountId: 102, debit: "40", credit: "0" }];

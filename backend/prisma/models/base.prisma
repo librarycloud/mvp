@@ -19,6 +19,30 @@ enum CompanyOperationMode {
   STANDARD
 }
 
+enum VatTaxpayerType {
+  UNKNOWN
+  SMALL_SCALE
+  GENERAL
+}
+
+enum TaxFilingPeriod {
+  UNKNOWN
+  MONTH
+  QUARTER
+}
+
+enum CitTaxCollectionMethod {
+  UNKNOWN
+  ACCOUNTING
+  ASSESSED
+}
+
+enum TaxEligibility {
+  UNKNOWN
+  YES
+  NO
+}
+
 enum AccountCategory {
   ASSET
   LIABILITY

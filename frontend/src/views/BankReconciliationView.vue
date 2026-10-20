@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { ArrowUp, Edit } from "@element-plus/icons-vue";
 import { api } from "../utils/api";
@@ -9,6 +9,7 @@ import { useAuthStore } from "../stores/auth";
 import { useClientPagination } from "../composables/useClientPagination";
 
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 const isAdmin = computed(() => auth.canOperateCash);
 const periods = ref<any[]>([]); const accounts = ref<any[]>([]); const rows = ref<any[]>([]); const active = ref<any>();
@@ -105,7 +106,7 @@ function goToVouchers() {
   router.push("/vouchers");
 }
 
-async function load() { loading.value = true; try { rows.value = await api.get<any[]>("/bank-reconciliations"); } finally { loading.value = false; } }
+async function load() { loading.value = true; try { const query = new URLSearchParams(); if (route.query.status === "0" || route.query.status === "1") query.set("status", String(route.query.status)); rows.value = await api.get<any[]>(`/bank-reconciliations${query.size ? `?${query}` : ""}`); } finally { loading.value = false; } }
 async function support() { [periods.value, accounts.value] = await Promise.all([api.get<any[]>("/accounting-periods"), api.get<any[]>("/accounts?tree=false&isEnabled=true")]); accounts.value = accounts.value.filter(row => row.isLeaf && row.code.startsWith("1002")); }
 
 async function syncCreateBalances(autoFill = false) {

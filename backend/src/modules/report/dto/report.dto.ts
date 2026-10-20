@@ -23,7 +23,8 @@ export const ReportSchema = Type.Object({
   template: Type.Object({ code: Type.String(), name: Type.String(), type: Type.String(), version: Type.Integer() }),
   lines: Type.Array(Type.Object({
     id: Type.Integer({ minimum: 1 }), reportId: Type.Integer({ minimum: 1 }), reportItemId: Type.Integer({ minimum: 1 }), openingAmount: Type.Union([Type.String(), Type.Null()]),
-    currentAmount: Type.Union([Type.String(), Type.Null()]), closingAmount: Type.Union([Type.String(), Type.Null()]),
+    currentAmount: Type.Union([Type.String(), Type.Null()]), yearToDateAmount: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    priorYearToDateAmount: Type.Optional(Type.Union([Type.String(), Type.Null()])), closingAmount: Type.Union([Type.String(), Type.Null()]),
     calculationTrace: Type.Union([Type.Any(), Type.Null()]),
     reportItem: Type.Object({ itemCode: Type.String(), name: Type.String(), lineNumber: Type.Union([Type.Integer(), Type.Null()]), sortOrder: Type.Integer() }),
   })),

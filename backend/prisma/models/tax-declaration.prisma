@@ -53,11 +53,13 @@ model TaxPayment {
   paymentDate       DateTime @map("payment_date") @db.Date
   paymentReference  String?  @map("payment_reference") @db.VarChar(100)
   bankTransactionId Int?     @unique @map("bank_transaction_id") @db.UnsignedInt
+  voucherId         Int?     @unique @map("voucher_id") @db.UnsignedInt
   paidById          Int      @map("paid_by_id") @db.UnsignedInt
   createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(3)
 
-  declaration     TaxDeclaration  @relation(fields: [declarationId], references: [id], onDelete: Restrict)
+  declaration     TaxDeclaration   @relation(fields: [declarationId], references: [id], onDelete: Restrict)
   bankTransaction BankTransaction? @relation("TaxPaymentBank", fields: [bankTransactionId], references: [id], onDelete: Restrict)
+  voucher         Voucher?         @relation("TaxPaymentVoucher", fields: [voucherId], references: [id], onDelete: Restrict)
 
   @@index([bankTransactionId])
   @@map("tax_payments")

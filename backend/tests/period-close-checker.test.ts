@@ -14,7 +14,7 @@ const period = {
   closedById: null,
 };
 
-function createChecker(assets: Array<{ originalValue: Prisma.Decimal; residualValue: Prisma.Decimal; accumulatedDepreciation: Prisma.Decimal; depreciationRecords: Array<{ status: number }> }>) {
+function createChecker(assets: Array<{ originalValue: Prisma.Decimal; residualValue: Prisma.Decimal; accumulatedDepreciation: Prisma.Decimal; depreciationRecords: Array<{ status: number }> }>, reports = [{ template: { type: "BALANCE_SHEET" } }, { template: { type: "INCOME_STATEMENT" } }, { template: { type: "CASH_FLOW_STATEMENT" } }]) {
   const prisma = {
     voucher: { count: vi.fn().mockResolvedValue(0) },
     voucherEntry: { aggregate: vi.fn().mockResolvedValue({ _sum: { debitAmount: new Prisma.Decimal(0), creditAmount: new Prisma.Decimal(0) } }) },
@@ -24,7 +24,7 @@ function createChecker(assets: Array<{ originalValue: Prisma.Decimal; residualVa
     employee: { count: vi.fn().mockResolvedValue(0) },
     salary: { count: vi.fn().mockResolvedValue(0) },
     reimbursement: { count: vi.fn().mockResolvedValue(0) },
-    report: { findMany: vi.fn().mockResolvedValue([{ template: { type: "BALANCE_SHEET" } }, { template: { type: "INCOME_STATEMENT" } }, { template: { type: "CASH_FLOW_STATEMENT" } }]) },
+    report: { findMany: vi.fn().mockResolvedValue(reports) },
   } as any;
   return { checker: new PrismaPeriodCloseChecker(prisma), findAssets: prisma.fixedAsset.findMany };
 }
@@ -65,5 +65,16 @@ describe("PrismaPeriodCloseChecker depreciation", () => {
     const result = await checker.inspect(period);
 
     expect(result.checks.find(check => check.code === "DEPRECIATION")).toMatchObject({ level: "PASS", count: 0 });
+  });
+});
+
+describe("PrismaPeriodCloseChecker financial reports", () => {
+  it("requires each primary report type instead of counting duplicate report records", async () => {
+    const reports = ["BALANCE_SHEET", "INCOME_STATEMENT", "CUSTOM"].map(type => ({ template: { type } }));
+    const { checker } = createChecker([], reports);
+
+    const result = await checker.inspect(period);
+
+    expect(result.checks.find(check => check.code === "REPORTS")).toMatchObject({ level: "BLOCK", count: 1, message: "尚缺：CASH_FLOW_STATEMENT" });
   });
 });

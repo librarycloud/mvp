@@ -13,6 +13,8 @@ export interface PersistReportLine {
   reportItemId: number;
   openingAmount: string | null;
   currentAmount: string | null;
+  yearToDateAmount?: string | null;
+  priorYearToDateAmount?: string | null;
   closingAmount: string | null;
   calculationTrace: Record<string, unknown>;
 }
@@ -312,6 +314,8 @@ export class PrismaReportRepository implements ReportRepository {
     return {
       openingAmount: line.openingAmount,
       currentAmount: line.currentAmount,
+      yearToDateAmount: line.yearToDateAmount ?? null,
+      priorYearToDateAmount: line.priorYearToDateAmount ?? null,
       closingAmount: line.closingAmount,
       calculationTrace: line.calculationTrace as Prisma.InputJsonObject,
     };

@@ -51,13 +51,16 @@ export class ReportService {
     const accounts = await this.repository.listAccounts();
     this.augmentTemplateMappings(template, accounts);
     this.validateTemplate(template, accounts);
+    const priorYearDates = ["INCOME_STATEMENT", "CASH_FLOW_STATEMENT", "EQUITY_CHANGE_STATEMENT"].includes(template.type)
+      ? await this.periodDates({ ...period, fiscalYear: period.fiscalYear - 1 }, false)
+      : null;
     const lines = template.type === "BALANCE_SHEET"
-      ? await this.balanceSheetLines(template, accounts, dates.start, dates.end)
+      ? await this.balanceSheetLines(template, accounts, dates)
       : template.type === "CASH_FLOW_STATEMENT"
-        ? await this.cashFlowLines(template, accounts, dates.start, dates.end)
+        ? await this.cashFlowLines(template, accounts, dates, priorYearDates)
         : template.type === "EQUITY_CHANGE_STATEMENT"
-          ? await this.equityChangeLines(template, accounts, dates, await this.periodDates({ ...period, fiscalYear: period.fiscalYear - 1 }, false))
-        : await this.incomeLines(template, accounts, dates.yearStart, dates.start, dates.end);
+          ? await this.equityChangeLines(template, accounts, dates, priorYearDates)
+        : await this.incomeLines(template, accounts, dates, priorYearDates);
     return this.repository.saveReport({
       templateId: template.id, period, periodStart: dates.start, periodEnd: dates.end, generatedById, lines,
     });
@@ -75,11 +78,11 @@ export class ReportService {
     const dates = await this.periodDates(period);
     const accounts = await this.repository.listAccounts();
     const earliest = new Date(1900, 0, 1);
-    const openingEnd = new Date(dates.start.getTime() - 1);
+    const openingEnd = new Date(dates.yearStart.getTime() - 1);
 
     const [openingTotals, currentTotals, closingTotals] = await Promise.all([
       this.repository.aggregateEntries(earliest, openingEnd),
-      this.repository.aggregateEntries(dates.start, dates.end),
+      this.repository.aggregateEntries(dates.yearStart, dates.end),
       this.repository.aggregateEntries(earliest, dates.end),
     ]);
 
@@ -195,6 +198,14 @@ export class ReportService {
     const report = await this.repository.findReportById(id);
     if (!report) throw new AppError("REPORT_NOT_FOUND", "报表不存在", 404);
     return report;
+  }
+
+  async getFiscalYearStart(fiscalYear: number, periodEnd: Date) {
+    const periods = await this.repository.listAccountingPeriods(fiscalYear);
+    const starts = periods
+      .filter((period) => period.month <= periodEnd.getMonth() + 1)
+      .map((period) => period.startDate.getTime());
+    return starts.length ? new Date(Math.min(...starts)) : new Date(fiscalYear, 0, 1);
   }
 
   async listReports(page = 1, pageSize = 20) {
@@ -313,6 +324,7 @@ export class ReportService {
         (l: any) => l.reportItemId === dep.sourceItemId || l.reportItem?.id === dep.sourceItemId,
       );
       const amount =
+        sourceLine?.yearToDateAmount ??
         sourceLine?.closingAmount ??
         sourceLine?.currentAmount ??
         "0.00";
@@ -337,6 +349,8 @@ export class ReportService {
         lineNumber: line.reportItem?.lineNumber ?? null,
         openingAmount: line.openingAmount,
         currentAmount: line.currentAmount,
+        yearToDateAmount: line.yearToDateAmount,
+        priorYearToDateAmount: line.priorYearToDateAmount,
         closingAmount: line.closingAmount,
         calculationTrace: line.calculationTrace,
       },
@@ -404,36 +418,44 @@ export class ReportService {
   private async incomeLines(
     template: ReportTemplateDefinition,
     accounts: ReportAccount[],
-    fiscalYearStart: Date,
-    start: Date,
-    end: Date,
+    dates: ReportPeriodDates,
+    previousPeriod: ReportPeriodDates | null,
   ): Promise<PersistReportLine[]> {
-    const [currentTotals, yearToDateTotals] = await Promise.all([
-      this.repository.aggregateEntries(start, end),
-      this.repository.aggregateEntries(fiscalYearStart, end),
+    const [currentTotals, yearToDateTotals, priorYearToDateTotals] = await Promise.all([
+      this.repository.aggregateEntries(dates.start, dates.end),
+      this.repository.aggregateEntries(dates.yearStart, dates.end),
+      previousPeriod
+        ? this.repository.aggregateEntries(previousPeriod.yearStart, previousPeriod.end)
+        : Promise.resolve([]),
     ]);
     const current = this.calculate(template, accounts, currentTotals);
     const yearToDate = this.calculate(template, accounts, yearToDateTotals);
+    const priorYearToDate = this.calculate(template, accounts, priorYearToDateTotals);
     return template.items.map((item) => ({
       reportItemId: item.id,
       openingAmount: null,
       currentAmount: this.reportAmount(current.get(item.id)?.value),
+      yearToDateAmount: this.reportAmount(yearToDate.get(item.id)?.value),
+      priorYearToDateAmount: this.reportAmount(priorYearToDate.get(item.id)?.value),
       closingAmount: this.reportAmount(yearToDate.get(item.id)?.value),
-      calculationTrace: { current: current.get(item.id)?.trace ?? {}, yearToDate: yearToDate.get(item.id)?.trace ?? {} },
+      calculationTrace: {
+        current: current.get(item.id)?.trace ?? {},
+        yearToDate: yearToDate.get(item.id)?.trace ?? {},
+        priorYearToDate: priorYearToDate.get(item.id)?.trace ?? {},
+      },
     }));
   }
 
   private async balanceSheetLines(
     template: ReportTemplateDefinition,
     accounts: ReportAccount[],
-    periodStart: Date,
-    periodEnd: Date,
+    dates: ReportPeriodDates,
   ): Promise<PersistReportLine[]> {
     const earliest = new Date(1900, 0, 1);
-    const openingEnd = new Date(periodStart.getTime() - 1);
+    const openingEnd = new Date(dates.yearStart.getTime() - 1);
     const [openingTotals, closingTotals] = await Promise.all([
       this.repository.aggregateEntries(earliest, openingEnd),
-      this.repository.aggregateEntries(earliest, periodEnd),
+      this.repository.aggregateEntries(earliest, dates.end),
     ]);
 
     const profitLossAccounts = new Set(accounts.filter((a) => a.category === "PROFIT_AND_LOSS").map((a) => a.id));
@@ -525,38 +547,61 @@ export class ReportService {
   private async cashFlowLines(
     template: ReportTemplateDefinition,
     accounts: ReportAccount[],
-    periodStart: Date,
-    periodEnd: Date,
+    dates: ReportPeriodDates,
+    previousPeriod: ReportPeriodDates | null,
   ): Promise<PersistReportLine[]> {
     const earliest = new Date(1900, 0, 1);
-    const [openingTotals, currentTotals, closingTotals] = await Promise.all([
-      this.repository.aggregateEntries(earliest, new Date(periodStart.getTime() - 1)),
-      this.repository.aggregateEntries(periodStart, periodEnd),
-      this.repository.aggregateEntries(earliest, periodEnd),
+    const [periodOpeningTotals, yearOpeningTotals, currentTotals, yearToDateTotals, closingTotals, priorYearOpeningTotals, priorYearToDateTotals, priorYearClosingTotals] = await Promise.all([
+      this.repository.aggregateEntries(earliest, new Date(dates.start.getTime() - 1)),
+      this.repository.aggregateEntries(earliest, new Date(dates.yearStart.getTime() - 1)),
+      this.repository.aggregateEntries(dates.start, dates.end),
+      this.repository.aggregateEntries(dates.yearStart, dates.end),
+      this.repository.aggregateEntries(earliest, dates.end),
+      previousPeriod
+        ? this.repository.aggregateEntries(earliest, new Date(previousPeriod.yearStart.getTime() - 1))
+        : Promise.resolve([]),
+      previousPeriod
+        ? this.repository.aggregateEntries(previousPeriod.yearStart, previousPeriod.end)
+        : Promise.resolve([]),
+      previousPeriod
+        ? this.repository.aggregateEntries(earliest, previousPeriod.end)
+        : Promise.resolve([]),
     ]);
-    const opening = this.calculate(template, accounts, openingTotals, "BALANCE");
+    const opening = this.calculate(template, accounts, periodOpeningTotals, "BALANCE");
+    const yearOpening = this.calculate(template, accounts, yearOpeningTotals, "BALANCE");
     const closing = this.calculate(template, accounts, closingTotals, "BALANCE");
+    const priorYearOpening = this.calculate(template, accounts, priorYearOpeningTotals, "BALANCE");
+    const priorYearClosing = this.calculate(template, accounts, priorYearClosingTotals, "BALANCE");
     const byCode = new Map(template.items.map((item) => [item.itemCode, item]));
     const usesDirectMappings = template.items.some((item) => item.mappings.some((mapping) => mapping.valueType === "CASH_INFLOW" || mapping.valueType === "CASH_OUTFLOW"));
     const cashAccountIds = usesDirectMappings ? this.cashAccountIds(template, accounts, byCode) : [];
-    const cashCounterparties = usesDirectMappings ? await this.repository.aggregateCashCounterparties(periodStart, periodEnd, cashAccountIds) : [];
-    const classifiedCurrent = this.calculate(template, accounts, currentTotals, "MOVEMENT", cashCounterparties);
-    const actualInflow = cashCounterparties.reduce((sum, item) => sum.plus(item.inflow), new Prisma.Decimal(0));
-    const actualOutflow = cashCounterparties.reduce((sum, item) => sum.plus(item.outflow), new Prisma.Decimal(0));
-    const classified = template.items.reduce((sum, item) => {
-      const value = classifiedCurrent.get(item.id)?.value ?? new Prisma.Decimal(0);
-      if (item.mappings.some((mapping) => mapping.valueType === "CASH_INFLOW")) sum.inflow = sum.inflow.plus(value);
-      if (item.mappings.some((mapping) => mapping.valueType === "CASH_OUTFLOW")) sum.outflow = sum.outflow.plus(value);
-      return sum;
-    }, { inflow: new Prisma.Decimal(0), outflow: new Prisma.Decimal(0) });
     const otherInflow = byCode.get("OPERATING_OTHER_INFLOW");
     const otherOutflow = byCode.get("OPERATING_OTHER_OUTFLOW");
     if (usesDirectMappings && (!otherInflow || !otherOutflow)) throw new AppError("REPORT_CASH_FLOW_TEMPLATE_INVALID", "直接法现金流量表必须配置其他经营活动现金流入和流出项目", 409);
-    const adjustments = new Map<number, Prisma.Decimal>([
-      ...(otherInflow ? [[otherInflow.id, actualInflow.minus(classified.inflow)] as [number, Prisma.Decimal]] : []),
-      ...(otherOutflow ? [[otherOutflow.id, actualOutflow.minus(classified.outflow)] as [number, Prisma.Decimal]] : []),
+    const calculateMovements = async (totals: ReportAccountTotal[], start: Date, end: Date) => {
+      const counterparties = usesDirectMappings ? await this.repository.aggregateCashCounterparties(start, end, cashAccountIds) : [];
+      const classified = this.calculate(template, accounts, totals, "MOVEMENT", counterparties);
+      const actualInflow = counterparties.reduce((sum, item) => sum.plus(item.inflow), new Prisma.Decimal(0));
+      const actualOutflow = counterparties.reduce((sum, item) => sum.plus(item.outflow), new Prisma.Decimal(0));
+      const classifiedTotals = template.items.reduce((sum, item) => {
+        const value = classified.get(item.id)?.value ?? new Prisma.Decimal(0);
+        if (item.mappings.some((mapping) => mapping.valueType === "CASH_INFLOW")) sum.inflow = sum.inflow.plus(value);
+        if (item.mappings.some((mapping) => mapping.valueType === "CASH_OUTFLOW")) sum.outflow = sum.outflow.plus(value);
+        return sum;
+      }, { inflow: new Prisma.Decimal(0), outflow: new Prisma.Decimal(0) });
+      const adjustments = new Map<number, Prisma.Decimal>([
+        ...(otherInflow ? [[otherInflow.id, actualInflow.minus(classifiedTotals.inflow)] as [number, Prisma.Decimal]] : []),
+        ...(otherOutflow ? [[otherOutflow.id, actualOutflow.minus(classifiedTotals.outflow)] as [number, Prisma.Decimal]] : []),
+      ]);
+      return this.calculate(template, accounts, totals, "MOVEMENT", counterparties, adjustments);
+    };
+    const [current, yearToDate, priorYearToDate] = await Promise.all([
+      calculateMovements(currentTotals, dates.start, dates.end),
+      calculateMovements(yearToDateTotals, dates.yearStart, dates.end),
+      previousPeriod
+        ? calculateMovements(priorYearToDateTotals, previousPeriod.yearStart, previousPeriod.end)
+        : Promise.resolve(new Map<number, CalculatedItem>()),
     ]);
-    const current = this.calculate(template, accounts, currentTotals, "MOVEMENT", cashCounterparties, adjustments);
     const netIncrease = byCode.get("NET_INCREASE_CASH");
     const beginning = byCode.get("CASH_BEGINNING");
     const ending = byCode.get("CASH_ENDING");
@@ -564,30 +609,62 @@ export class ReportService {
       if (!netIncrease || !beginning || !ending) {
         throw new AppError("REPORT_CASH_FLOW_TEMPLATE_INVALID", "现金流量表必须同时配置现金净增加额、期初现金和期末现金项目", 409);
       }
-      const difference = (closing.get(ending.id)?.value ?? new Prisma.Decimal(0))
-        .minus(opening.get(beginning.id)?.value ?? new Prisma.Decimal(0));
-      if (!usesDirectMappings) {
-        const legacyExpected = current.get(netIncrease.id)?.value ?? new Prisma.Decimal(0);
-        if (!difference.equals(legacyExpected)) {
+      const reconcile = (
+        movement: Map<number, CalculatedItem>,
+        beginningBalances: Map<number, CalculatedItem>,
+        endingBalances: Map<number, CalculatedItem>,
+        column: string,
+      ) => {
+        const difference = (endingBalances.get(ending.id)?.value ?? new Prisma.Decimal(0))
+          .minus(beginningBalances.get(beginning.id)?.value ?? new Prisma.Decimal(0));
+        const expected = movement.get(netIncrease.id)?.value ?? new Prisma.Decimal(0);
+        if (!usesDirectMappings && !difference.equals(expected)) {
+          const adjustment = difference.minus(expected);
           const operating = byCode.get("NET_CASH_OPERATING");
           if (operating) {
-            const operatingValue = current.get(operating.id)?.value ?? new Prisma.Decimal(0);
-            current.set(operating.id, { value: operatingValue.plus(difference.minus(legacyExpected)), trace: { ...(current.get(operating.id)?.trace ?? {}), cashReconciliationAdjustment: { adjustment: difference.minus(legacyExpected).toString() } } });
+            const operatingValue = movement.get(operating.id)?.value ?? new Prisma.Decimal(0);
+            movement.set(operating.id, { value: operatingValue.plus(adjustment), trace: { ...(movement.get(operating.id)?.trace ?? {}), cashReconciliationAdjustment: { column, adjustment: adjustment.toString() } } });
           }
-          current.set(netIncrease.id, { value: difference, trace: { ...(current.get(netIncrease.id)?.trace ?? {}), cashReconciliation: { cashBalanceDifference: difference.toString() } } });
+          movement.set(netIncrease.id, { value: difference, trace: { ...(movement.get(netIncrease.id)?.trace ?? {}), cashReconciliation: { column, cashBalanceDifference: difference.toString() } } });
         }
-      }
-      const expected = current.get(netIncrease.id)?.value ?? new Prisma.Decimal(0);
-      if (!difference.equals(expected)) {
-        throw new AppError("REPORT_CASH_FLOW_UNBALANCED", "直接法现金流量与现金余额变动不一致，请检查现金科目配置和已记账凭证", 409, { cashBalanceDifference: difference.toString(), netCashIncrease: expected.toString() });
-      }
+        const reconciled = movement.get(netIncrease.id)?.value ?? new Prisma.Decimal(0);
+        if (!difference.equals(reconciled)) {
+          throw new AppError("REPORT_CASH_FLOW_UNBALANCED", "直接法现金流量与现金余额变动不一致，请检查现金科目配置和已记账凭证", 409, { column, cashBalanceDifference: difference.toString(), netCashIncrease: reconciled.toString() });
+        }
+      };
+      reconcile(current, opening, closing, "CURRENT");
+      reconcile(yearToDate, yearOpening, closing, "YEAR_TO_DATE");
+      if (previousPeriod) reconcile(priorYearToDate, priorYearOpening, priorYearClosing, "PRIOR_YEAR_TO_DATE");
     }
     return template.items.map((item) => ({
       reportItemId: item.id,
       openingAmount: this.reportAmount(opening.get(item.id)?.value),
-      currentAmount: this.reportAmount(current.get(item.id)?.value),
+      currentAmount: item.itemCode === "CASH_BEGINNING"
+        ? this.reportAmount(opening.get(item.id)?.value)
+        : item.itemCode === "CASH_ENDING"
+          ? this.reportAmount(closing.get(item.id)?.value)
+          : this.reportAmount(current.get(item.id)?.value),
+      yearToDateAmount: item.itemCode === "CASH_BEGINNING"
+        ? this.reportAmount(yearOpening.get(item.id)?.value)
+        : item.itemCode === "CASH_ENDING"
+          ? this.reportAmount(closing.get(item.id)?.value)
+          : this.reportAmount(yearToDate.get(item.id)?.value),
+      priorYearToDateAmount: item.itemCode === "CASH_BEGINNING"
+        ? this.reportAmount(priorYearOpening.get(item.id)?.value)
+        : item.itemCode === "CASH_ENDING"
+          ? this.reportAmount(priorYearClosing.get(item.id)?.value)
+          : this.reportAmount(priorYearToDate.get(item.id)?.value),
       closingAmount: this.reportAmount(closing.get(item.id)?.value),
-      calculationTrace: { opening: opening.get(item.id)?.trace ?? {}, current: current.get(item.id)?.trace ?? {}, closing: closing.get(item.id)?.trace ?? {} },
+      calculationTrace: {
+        opening: opening.get(item.id)?.trace ?? {},
+        current: current.get(item.id)?.trace ?? {},
+        yearOpening: yearOpening.get(item.id)?.trace ?? {},
+        yearToDate: yearToDate.get(item.id)?.trace ?? {},
+        priorYearOpening: priorYearOpening.get(item.id)?.trace ?? {},
+        priorYearToDate: priorYearToDate.get(item.id)?.trace ?? {},
+        priorYearClosing: priorYearClosing.get(item.id)?.trace ?? {},
+        closing: closing.get(item.id)?.trace ?? {},
+      },
     }));
   }
 
@@ -599,10 +676,10 @@ export class ReportService {
   ): Promise<PersistReportLine[]> {
     const earliest = new Date(1900, 0, 1);
     const [currentOpeningTotals, currentMovementTotals, previousOpeningTotals, previousMovementTotals] = await Promise.all([
-      this.repository.aggregateEntries(earliest, new Date(currentPeriod.start.getTime() - 1)),
-      this.repository.aggregateEntries(currentPeriod.start, currentPeriod.end),
-      previousPeriod ? this.repository.aggregateEntries(earliest, new Date(previousPeriod.start.getTime() - 1)) : Promise.resolve([]),
-      previousPeriod ? this.repository.aggregateEntries(previousPeriod.start, previousPeriod.end) : Promise.resolve([]),
+      this.repository.aggregateEntries(earliest, new Date(currentPeriod.yearStart.getTime() - 1)),
+      this.repository.aggregateEntries(currentPeriod.yearStart, currentPeriod.end),
+      previousPeriod ? this.repository.aggregateEntries(earliest, new Date(previousPeriod.yearStart.getTime() - 1)) : Promise.resolve([]),
+      previousPeriod ? this.repository.aggregateEntries(previousPeriod.yearStart, previousPeriod.end) : Promise.resolve([]),
     ]);
     const buckets = {
       CY_OPEN: this.calculate(template, accounts, currentOpeningTotals),

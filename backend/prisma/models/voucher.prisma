@@ -57,6 +57,7 @@ model Voucher {
   yearEndClosing         YearEndClosing?       @relation("YearEndVoucher")
   reimbursement          Reimbursement?        @relation("ReimbursementVoucher")
   fixedAssetDisposal     FixedAssetDisposal?   @relation("FixedAssetDisposalVoucher")
+  taxPayment             TaxPayment?           @relation("TaxPaymentVoucher")
 
   @@unique([fiscalYear, sequenceNo])
   @@index([fiscalYear, fiscalPeriod, status])

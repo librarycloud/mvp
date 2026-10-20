@@ -123,6 +123,8 @@ model ReportLine {
   reportItemId     Int       @map("report_item_id") @db.UnsignedInt
   openingAmount    Decimal?  @map("opening_amount") @db.Decimal(19, 4)
   currentAmount    Decimal?  @map("current_amount") @db.Decimal(19, 4)
+  yearToDateAmount Decimal?  @map("year_to_date_amount") @db.Decimal(19, 4)
+  priorYearToDateAmount Decimal? @map("prior_year_to_date_amount") @db.Decimal(19, 4)
   closingAmount    Decimal?  @map("closing_amount") @db.Decimal(19, 4)
   calculationTrace Json?     @map("calculation_trace")
   createdAt        DateTime  @default(now()) @map("created_at") @db.DateTime(3)

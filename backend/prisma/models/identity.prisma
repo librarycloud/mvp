@@ -91,20 +91,30 @@ model SystemSetting {
 }
 
 model CompanyProfile {
-  id                      Int                  @id @default(autoincrement()) @db.UnsignedInt
-  name                    String               @db.VarChar(200)
-  unifiedSocialCreditCode String               @unique @map("unified_social_credit_code") @db.VarChar(32)
-  legalRepresentative     String?              @map("legal_representative") @db.VarChar(100)
-  address                 String?              @db.VarChar(500)
-  phone                   String?              @db.VarChar(50)
-  bankName                String?              @map("bank_name") @db.VarChar(200)
-  bankAccount             String?              @map("bank_account") @db.VarChar(100)
-  baseCurrency            String               @default("CNY") @map("base_currency") @db.Char(3)
-  fiscalYearStartMonth    Int                  @default(1) @map("fiscal_year_start_month") @db.UnsignedTinyInt
-  operationMode           CompanyOperationMode @default(SIMPLE) @map("operation_mode")
-  createdAt               DateTime             @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt               DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
-  deletedAt               DateTime?            @map("deleted_at") @db.DateTime(3)
+  id                            Int                    @id @default(autoincrement()) @db.UnsignedInt
+  name                          String                 @db.VarChar(200)
+  unifiedSocialCreditCode       String                 @unique @map("unified_social_credit_code") @db.VarChar(32)
+  legalRepresentative           String?                @map("legal_representative") @db.VarChar(100)
+  address                       String?                @db.VarChar(500)
+  phone                         String?                @db.VarChar(50)
+  bankName                      String?                @map("bank_name") @db.VarChar(200)
+  bankAccount                   String?                @map("bank_account") @db.VarChar(100)
+  baseCurrency                  String                 @default("CNY") @map("base_currency") @db.Char(3)
+  fiscalYearStartMonth          Int                    @default(1) @map("fiscal_year_start_month") @db.UnsignedTinyInt
+  operationMode                 CompanyOperationMode   @default(SIMPLE) @map("operation_mode")
+  vatTaxpayerType               VatTaxpayerType        @default(UNKNOWN) @map("vat_taxpayer_type")
+  vatFilingPeriod               TaxFilingPeriod        @default(UNKNOWN) @map("vat_filing_period")
+  citFilingPeriod               TaxFilingPeriod        @default(UNKNOWN) @map("cit_filing_period")
+  citTaxCollectionMethod        CitTaxCollectionMethod @default(UNKNOWN) @map("cit_tax_collection_method")
+  smallProfitEnterpriseEligible TaxEligibility         @default(UNKNOWN) @map("small_profit_enterprise_eligible")
+  urbanMaintenanceRate          Decimal?               @map("urban_maintenance_rate") @db.Decimal(5, 4)
+  educationSurchargeRate        Decimal                @default(0.03) @map("education_surcharge_rate") @db.Decimal(5, 4)
+  localEducationSurchargeRate   Decimal                @default(0.02) @map("local_education_surcharge_rate") @db.Decimal(5, 4)
+  surchargeReductionEligible    TaxEligibility         @default(UNKNOWN) @map("surcharge_reduction_eligible")
+  surchargeReductionRate        Decimal                @default(0) @map("surcharge_reduction_rate") @db.Decimal(5, 4)
+  createdAt                     DateTime               @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt                     DateTime               @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt                     DateTime?              @map("deleted_at") @db.DateTime(3)
 
   @@index([deletedAt])
   @@map("company_profiles")

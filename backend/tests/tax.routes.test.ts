@@ -26,6 +26,7 @@ describe("tax declaration routes", () => {
       foundation: noop,
       listDeclarations: noop,
       declaration: noop,
+      exportDraft: noop,
       prepare,
       updateLines: noop,
       review: noop,

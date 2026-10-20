@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useAuthStore } from "../stores/auth";
 import { api } from "../utils/api";
@@ -16,6 +17,7 @@ interface ExpenseTypeOption { id: number; code: string; name: string; value: str
 interface TaxTreatment { deductionStatus: TaxDeductionStatus; deductibleTaxAmount: string; }
 
 const auth = useAuthStore();
+const route = useRoute();
 const isAdmin = computed(() => auth.canManageAccounting);
 const canPay = computed(() => auth.canOperateCash);
 const rows = ref<any[]>([]);
@@ -272,7 +274,11 @@ async function pay() {
   await load();
 }
 
-onMounted(async () => { await Promise.all([support(), load()]); });
+onMounted(async () => {
+  const status = Number(route.query.status);
+  if (route.query.status !== undefined && Number.isInteger(status) && status >= 0 && status <= 4) filters.status = String(status);
+  await Promise.all([support(), load()]);
+});
 onBeforeUnmount(closeAttachmentPreview);
 </script>
 

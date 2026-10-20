@@ -15,6 +15,7 @@ const companyReader = {
 function report(type: string, lines: Array<Record<string, unknown>>) {
   return {
     id: 1,
+    fiscalYear: 2026,
     periodStart: new Date(2026, 6, 1),
     periodEnd: new Date(2026, 6, 31),
     template: { name: type, type },
@@ -30,7 +31,10 @@ async function exportWorkbook(type: string, lines: Array<Record<string, unknown>
 }
 
 async function exportBuffer(type: string, lines: Array<Record<string, unknown>>) {
-  const reports = { getReport: async () => report(type, lines) } as unknown as ReportService;
+  const reports = {
+    getReport: async () => report(type, lines),
+    getFiscalYearStart: async (fiscalYear: number) => new Date(fiscalYear, 0, 1),
+  } as unknown as ReportService;
   return new ReportExportService(reports, null, companyReader).excel(1);
 }
 
@@ -103,25 +107,31 @@ describe("ReportExportService", () => {
 
   it("exports the income statement without replacing subtotal formulas", async () => {
     const workbook = await exportWorkbook("INCOME_STATEMENT", [{
-      openingAmount: "150", currentAmount: "200", closingAmount: "200",
+      openingAmount: null, currentAmount: "200", yearToDateAmount: "350", priorYearToDateAmount: "300", closingAmount: "350",
       reportItem: { itemCode: "OPERATING_REVENUE", lineNumber: 1, name: "营业收入" },
     }]);
     const sheet = workbook.getWorksheet("利润表")!;
     expect(workbook.worksheets).toHaveLength(2);
-    expect(sheet.getCell("C6").value).toBe(200);
-    expect(sheet.getCell("D6").value).toBe(150);
+    expect(sheet.getCell("C6").value).toBe(350);
+    expect(sheet.getCell("D6").value).toBe(300);
+    expect(sheet.getCell("C5").value).toBe("本期金额");
+    expect(sheet.getCell("D5").value).toBe("上期金额");
+    expect(sheet.getCell("C4").value).toBe("2026-01-01");
     expect(sheet.getCell("C24").type).toBe(ExcelJS.ValueType.Formula);
   });
 
   it("exports the cash-flow statement using input rows only", async () => {
     const workbook = await exportWorkbook("CASH_FLOW_STATEMENT", [
-      { openingAmount: "0", currentAmount: "80", closingAmount: "0", reportItem: { itemCode: "NET_CASH_OPERATING", lineNumber: 10, name: "经营活动现金流量净额" } },
-      { openingAmount: "20", currentAmount: "0", closingAmount: "100", reportItem: { itemCode: "CASH_BEGINNING", lineNumber: 41, name: "期初现金" } },
+      { openingAmount: "0", currentAmount: "80", yearToDateAmount: "160", priorYearToDateAmount: "100", closingAmount: "0", reportItem: { itemCode: "NET_CASH_OPERATING", lineNumber: 10, name: "经营活动现金流量净额" } },
+      { openingAmount: "20", currentAmount: "0", yearToDateAmount: "30", priorYearToDateAmount: "15", closingAmount: "100", reportItem: { itemCode: "CASH_BEGINNING", lineNumber: 41, name: "期初现金" } },
     ]);
     const sheet = workbook.getWorksheet("现金流量表")!;
     expect(workbook.worksheets).toHaveLength(2);
-    expect(sheet.getCell("C9").value).toBe(80);
-    expect(sheet.getCell("C42").value).toBe(20);
+    expect(sheet.getCell("C9").value).toBe(160);
+    expect(sheet.getCell("D9").value).toBe(100);
+    expect(sheet.getCell("C42").value).toBe(30);
+    expect(sheet.getCell("D42").value).toBe(15);
+    expect(sheet.getCell("D5").value).toBe("上期金额");
     expect(sheet.getCell("C10").type).toBe(ExcelJS.ValueType.Formula);
   });
 
@@ -129,11 +139,19 @@ describe("ReportExportService", () => {
     const workbook = await exportWorkbook("EQUITY_CHANGE_STATEMENT", [
       { openingAmount: null, currentAmount: "100", closingAmount: null, reportItem: { itemCode: "CY_OPEN_PAID_CAPITAL", lineNumber: 7, name: "本年年初实收资本" } },
       { openingAmount: null, currentAmount: "20", closingAmount: null, reportItem: { itemCode: "CY_CHANGE_PAID_CAPITAL", lineNumber: 18, name: "本年实收资本变动" } },
+      { openingAmount: null, currentAmount: "110", closingAmount: null, reportItem: { itemCode: "PY_OPEN_PAID_CAPITAL", lineNumber: 7, name: "上年年初实收资本" } },
+      { openingAmount: null, currentAmount: "15", closingAmount: null, reportItem: { itemCode: "PY_CHANGE_PAID_CAPITAL", lineNumber: 18, name: "上年实收资本变动" } },
+      { openingAmount: null, currentAmount: "8", closingAmount: null, reportItem: { itemCode: "CY_CHANGE_SURPLUS_RESERVE", lineNumber: 18, name: "本年盈余公积变动" } },
+      { openingAmount: null, currentAmount: "4", closingAmount: null, reportItem: { itemCode: "PY_CHANGE_SURPLUS_RESERVE", lineNumber: 18, name: "上年盈余公积变动" } },
     ]);
     const sheet = workbook.getWorksheet("所有者权益变动表")!;
     expect(workbook.worksheets).toHaveLength(2);
     expect(sheet.getCell("C7").value).toBe(100);
-    expect(sheet.getCell("C18").value).toBe(20);
+    expect(sheet.getCell("N7").value).toBe(110);
+    expect(sheet.getCell("C15").value).toBe(20);
+    expect(sheet.getCell("N15").value).toBe(15);
+    expect(sheet.getCell("K20").value).toBe(8);
+    expect(sheet.getCell("V20").value).toBe(4);
     expect(sheet.getCell("M7").type).toBe(ExcelJS.ValueType.Formula);
   });
 

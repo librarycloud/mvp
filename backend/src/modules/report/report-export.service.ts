@@ -10,11 +10,14 @@ import { XlsxTemplatePatcher } from "./xlsx-template-patcher.js";
 interface ExportLine {
   openingAmount: unknown;
   currentAmount: unknown;
+  yearToDateAmount?: unknown;
+  priorYearToDateAmount?: unknown;
   closingAmount: unknown;
   reportItem: { itemCode: string; lineNumber: number | null; name: string };
 }
 interface ExportReport {
   id: number;
+  fiscalYear: number;
   periodStart: Date;
   periodEnd: Date;
   template: { name: string; type: string };
@@ -92,20 +95,23 @@ export class ReportExportService {
       const chunks: Buffer[] = []; doc.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk))); doc.on("end", () => resolve(Buffer.concat(chunks))); doc.on("error", reject);
       doc.font(font).fontSize(16).text(report.template.name, { align: "center" });
       doc.fontSize(9).text(`${this.date(report.periodStart)} 至 ${this.date(report.periodEnd)}`, { align: "center" }).moveDown();
-      const widths = [36, 190, 85, 85, 85]; const headers = ["行次", "项目", "期初/上期", "本期", "期末/累计"];
+      const widths = [36, 165, 80, 80, 80, 80]; const headers = ["行次", "项目", "期初", "本期", "本年累计", "期末"];
       this.pdfRow(doc, headers, widths, true);
-      for (const line of report.lines) { if (doc.y > 760) { doc.addPage(); this.pdfRow(doc, headers, widths, true); } this.pdfRow(doc, [String(line.reportItem.lineNumber ?? ""), line.reportItem.name, this.textAmount(line.openingAmount), this.textAmount(line.currentAmount), this.textAmount(line.closingAmount)], widths, false); }
+      for (const line of report.lines) { if (doc.y > 760) { doc.addPage(); this.pdfRow(doc, headers, widths, true); } this.pdfRow(doc, [String(line.reportItem.lineNumber ?? ""), line.reportItem.name, this.textAmount(line.openingAmount), this.textAmount(line.currentAmount), this.textAmount(line.yearToDateAmount), this.textAmount(line.closingAmount)], widths, false); }
       doc.end();
     });
   }
 
   private async fillMetadata(cells: Map<string, string | number>, report: ExportReport, type: string) {
     const company = await this.companyReader?.companyProfile.findFirst({ where: { deletedAt: null }, select: { name: true, unifiedSocialCreditCode: true } });
+    const statementStart = type === "BALANCE_SHEET"
+      ? report.periodStart
+      : await this.reports.getFiscalYearStart(report.fiscalYear, report.periodEnd);
     const metadata: Record<string, string> = type === "BALANCE_SHEET"
-      ? { D3: company?.unifiedSocialCreditCode ?? "", H3: company?.name ?? "", D4: this.date(report.periodStart), H4: this.date(report.periodEnd) }
+      ? { D3: company?.unifiedSocialCreditCode ?? "", H3: company?.name ?? "", D4: this.date(statementStart), H4: this.date(report.periodEnd) }
       : type === "EQUITY_CHANGE_STATEMENT"
-        ? { C3: company?.unifiedSocialCreditCode ?? "", E3: company?.name ?? "", H3: this.date(report.periodStart), J3: this.date(report.periodEnd) }
-        : { C3: company?.unifiedSocialCreditCode ?? "", E3: company?.name ?? "", C4: this.date(report.periodStart), E4: this.date(report.periodEnd) };
+        ? { C3: company?.unifiedSocialCreditCode ?? "", E3: company?.name ?? "", H3: this.date(statementStart), J3: this.date(report.periodEnd) }
+        : { C3: company?.unifiedSocialCreditCode ?? "", E3: company?.name ?? "", C4: this.date(statementStart), E4: this.date(report.periodEnd) };
     for (const [address, value] of Object.entries(metadata)) cells.set(address, value);
   }
 
@@ -129,14 +135,20 @@ export class ReportExportService {
     for (const line of lines) {
       const name = INCOME_ALIASES[line.reportItem.name] ?? line.reportItem.name;
       const row = rows.get(name); if (!row) continue;
-      const amount = line.closingAmount !== null && line.closingAmount !== undefined ? line.closingAmount : line.currentAmount;
-      this.setInput(sheet, values, `C${row}`, amount);
-      if (line.openingAmount !== null && line.openingAmount !== undefined) this.setInput(sheet, values, `D${row}`, line.openingAmount);
+      const yearToDateAmount = line.yearToDateAmount ?? line.closingAmount ?? line.currentAmount;
+      this.setInput(sheet, values, `C${row}`, yearToDateAmount);
+      if (line.priorYearToDateAmount !== null && line.priorYearToDateAmount !== undefined) {
+        this.setInput(sheet, values, `D${row}`, line.priorYearToDateAmount);
+      }
     }
   }
 
   private fillCashFlow(sheet: ExcelJS.Worksheet, lines: ExportLine[], values: Map<string, string | number>) {
-    const amounts = new Map(lines.map((line) => [line.reportItem.itemCode, this.number(line.currentAmount) ?? 0]));
+    const amountForCurrentPeriod = (line: ExportLine) => this.number(line.yearToDateAmount ?? line.closingAmount ?? line.currentAmount) ?? 0;
+    const amounts = new Map(lines.map((line) => [line.reportItem.itemCode, amountForCurrentPeriod(line)]));
+    const priorYearAmounts = new Map(lines
+      .filter((line) => line.priorYearToDateAmount !== null && line.priorYearToDateAmount !== undefined)
+      .map((line) => [line.reportItem.itemCode, this.number(line.priorYearToDateAmount) ?? 0]));
     const cellByCode: Record<string, string> = {
       OPERATING_CASH_SALES: "C7", OPERATING_TAX_REFUND: "C8", OPERATING_OTHER_INFLOW: "C9",
       OPERATING_PURCHASES: "C11", OPERATING_EMPLOYEE_PAYMENTS: "C12", OPERATING_TAX_PAYMENTS: "C13", OPERATING_OTHER_OUTFLOW: "C14",
@@ -147,23 +159,40 @@ export class ReportExportService {
     };
     const hasDirectRows = Object.keys(cellByCode).some((code) => amounts.has(code));
     if (hasDirectRows) {
-      for (const [code, address] of Object.entries(cellByCode)) this.setInput(sheet, values, address, amounts.get(code) ?? 0);
+      for (const [code, address] of Object.entries(cellByCode)) {
+        this.setInput(sheet, values, address, amounts.get(code) ?? 0);
+        if (priorYearAmounts.has(code)) this.setInput(sheet, values, address.replace(/^C/, "D"), priorYearAmounts.get(code));
+      }
     } else {
       const operatingNet = amounts.get("NET_CASH_OPERATING") ?? 0;
       this.setInput(sheet, values, operatingNet >= 0 ? "C9" : "C14", Math.abs(operatingNet));
+      if (priorYearAmounts.has("NET_CASH_OPERATING")) {
+        const priorYearOperatingNet = priorYearAmounts.get("NET_CASH_OPERATING")!;
+        this.setInput(sheet, values, priorYearOperatingNet >= 0 ? "D9" : "D14", Math.abs(priorYearOperatingNet));
+      }
     }
     const beginning = lines.find((line) => line.reportItem.itemCode === "CASH_BEGINNING");
-    if (beginning) this.setInput(sheet, values, "C42", beginning.openingAmount);
+    if (beginning) {
+      this.setInput(sheet, values, "C42", beginning.yearToDateAmount ?? beginning.openingAmount);
+      if (beginning.priorYearToDateAmount !== null && beginning.priorYearToDateAmount !== undefined) {
+        this.setInput(sheet, values, "D42", beginning.priorYearToDateAmount);
+      }
+    }
   }
 
   private fillEquityChange(sheet: ExcelJS.Worksheet, lines: ExportLine[], values: Map<string, string | number>) {
     const amounts = new Map(lines.map((line) => [line.reportItem.itemCode, this.number(line.currentAmount) ?? 0]));
-    const columns = { PAID_CAPITAL: ["C", "N"], CAPITAL_RESERVE: ["G", "R"], TREASURY_STOCK: ["H", "S"], SURPLUS_RESERVE: ["K", "V"] } as const;
-    for (const [component, [currentColumn, previousColumn]] of Object.entries(columns)) {
-      this.setInput(sheet, values, `${currentColumn}7`, amounts.get(`CY_OPEN_${component}`) ?? 0);
-      this.setInput(sheet, values, `${previousColumn}7`, amounts.get(`PY_OPEN_${component}`) ?? 0);
-      this.setInput(sheet, values, `${currentColumn}18`, amounts.get(`CY_CHANGE_${component}`) ?? 0);
-      this.setInput(sheet, values, `${previousColumn}18`, amounts.get(`PY_CHANGE_${component}`) ?? 0);
+    const columns = [
+      { code: "PAID_CAPITAL", current: "C", previous: "N", movementRow: 15 },
+      { code: "CAPITAL_RESERVE", current: "G", previous: "R", movementRow: 15 },
+      { code: "TREASURY_STOCK", current: "H", previous: "S", movementRow: 18 },
+      { code: "SURPLUS_RESERVE", current: "K", previous: "V", movementRow: 20 },
+    ] as const;
+    for (const component of columns) {
+      this.setInput(sheet, values, `${component.current}7`, amounts.get(`CY_OPEN_${component.code}`) ?? 0);
+      this.setInput(sheet, values, `${component.previous}7`, amounts.get(`PY_OPEN_${component.code}`) ?? 0);
+      this.setInput(sheet, values, `${component.current}${component.movementRow}`, amounts.get(`CY_CHANGE_${component.code}`) ?? 0);
+      this.setInput(sheet, values, `${component.previous}${component.movementRow}`, amounts.get(`PY_CHANGE_${component.code}`) ?? 0);
     }
     this.setInput(sheet, values, "L7", (amounts.get("CY_OPEN_CURRENT_PROFIT") ?? 0) + (amounts.get("CY_OPEN_PROFIT_DISTRIBUTION") ?? 0));
     this.setInput(sheet, values, "W7", (amounts.get("PY_OPEN_CURRENT_PROFIT") ?? 0) + (amounts.get("PY_OPEN_PROFIT_DISTRIBUTION") ?? 0));
@@ -178,11 +207,11 @@ export class ReportExportService {
 
   private async genericExcel(report: ExportReport) {
     const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet(report.template.name, { pageSetup: { orientation: "portrait", fitToPage: true, fitToWidth: 1 } });
-    sheet.mergeCells("A1:E1"); sheet.getCell("A1").value = report.template.name; sheet.getCell("A1").font = { bold: true, size: 16 }; sheet.getCell("A1").alignment = { horizontal: "center" };
-    sheet.mergeCells("A2:E2"); sheet.getCell("A2").value = `${this.date(report.periodStart)} 至 ${this.date(report.periodEnd)}`; sheet.getCell("A2").alignment = { horizontal: "center" };
-    sheet.addRow(["行次", "项目", "期初/上期", "本期", "期末/累计"]);
-    for (const line of report.lines) sheet.addRow([line.reportItem.lineNumber ?? "", line.reportItem.name, this.number(line.openingAmount), this.number(line.currentAmount), this.number(line.closingAmount)]);
-    sheet.columns = [{ width: 10 }, { width: 34 }, { width: 18 }, { width: 18 }, { width: 18 }];
+    sheet.mergeCells("A1:G1"); sheet.getCell("A1").value = report.template.name; sheet.getCell("A1").font = { bold: true, size: 16 }; sheet.getCell("A1").alignment = { horizontal: "center" };
+    sheet.mergeCells("A2:G2"); sheet.getCell("A2").value = `${this.date(report.periodStart)} 至 ${this.date(report.periodEnd)}`; sheet.getCell("A2").alignment = { horizontal: "center" };
+    sheet.addRow(["行次", "项目", "期初", "本期", "本年累计", "上年同期累计", "期末"]);
+    for (const line of report.lines) sheet.addRow([line.reportItem.lineNumber ?? "", line.reportItem.name, this.number(line.openingAmount), this.number(line.currentAmount), this.number(line.yearToDateAmount), this.number(line.priorYearToDateAmount), this.number(line.closingAmount)]);
+    sheet.columns = [{ width: 10 }, { width: 34 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 18 }];
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
