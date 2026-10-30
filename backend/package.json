@@ -37,7 +37,7 @@
     "exceljs": "^4.4.0",
     "fast-jwt": "^6.3.5",
     "fast-xml-parser": "^5.10.1",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.6",
     "jszip": "^3.10.1",
     "openai": "^6.46.0",
     "pdfkit": "^0.19.1",
