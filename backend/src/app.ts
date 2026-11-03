@@ -173,7 +173,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // P1 安全修复：配置 CORS，限制允许的来源，防止跨站请求伪造
     origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => {
       if (config.nodeEnv !== "production") {
-        cb(null, true);
+        if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+          cb(null, true);
+        } else {
+          cb(new Error("Not allowed by CORS"), false);
+        }
         return;
       }
       const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean);

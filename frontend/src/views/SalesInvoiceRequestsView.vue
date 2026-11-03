@@ -14,8 +14,26 @@ async function load() { loading.value = true; try { rows.value = await api.get("
 function open() { Object.assign(form, { buyerName: "", buyerIdNum: "", invoiceType: "ORDINARY", amountWithoutTax: "", taxAmount: "", remark: "" }); visible.value = true; }
 async function submit() { await api.post("/invoices/sales-requests", form); visible.value = false; ElMessage.success("开票申请已提交"); await load(); }
 async function approve(row: any) { await api.post(`/invoices/sales-requests/${row.id}/approve`); await load(); }
-async function reject(row: any) { const result = await ElMessageBox.prompt("填写驳回原因", "驳回开票申请", { inputPattern: /\S+/, inputErrorMessage: "原因不能为空" }); await api.post(`/invoices/sales-requests/${row.id}/reject`, { reason: result.value }); await load(); }
-async function issue(row: any) { const result = await ElMessageBox.prompt("输入已归档销项发票的记录编号", "登记发票开具", { inputPattern: /^\d+$/, inputErrorMessage: "请输入发票记录编号" }); await api.post(`/invoices/sales-requests/${row.id}/issue`, { invoiceId: Number(result.value) }); await load(); }
+async function reject(row: any) {
+  let result: any;
+  try {
+    result = await ElMessageBox.prompt("填写驳回原因", "驳回开票申请", { inputPattern: /\S+/, inputErrorMessage: "原因不能为空" });
+  } catch {
+    return;
+  }
+  await api.post(`/invoices/sales-requests/${row.id}/reject`, { reason: result.value });
+  await load();
+}
+async function issue(row: any) {
+  let result: any;
+  try {
+    result = await ElMessageBox.prompt("输入已归档销项发票的记录编号", "登记发票开具", { inputPattern: /^\d+$/, inputErrorMessage: "请输入发票记录编号" });
+  } catch {
+    return;
+  }
+  await api.post(`/invoices/sales-requests/${row.id}/issue`, { invoiceId: Number(result.value) });
+  await load();
+}
 onMounted(load);
 </script>
 

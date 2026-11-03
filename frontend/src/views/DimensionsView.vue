@@ -15,7 +15,18 @@ function openRule() { rule.value = { accountId: "", dimensionId: "", required: t
 async function saveDimension() { await api.post("/dimensions", dimension.value); dimensionDialog.value = false; await load(); ElMessage.success("维度已创建"); }
 async function saveMember() { if (editingMemberId.value) await api.put(`/dimensions/members/${editingMemberId.value}`, member.value); else await api.post(`/dimensions/${active.value.id}/members`, member.value); memberDialog.value = false; await load(); ElMessage.success(editingMemberId.value ? "成员已更新" : "成员已创建"); }
 async function saveRule() { await api.post("/dimensions/rules", { ...rule.value, accountId: Number(rule.value.accountId), dimensionId: Number(rule.value.dimensionId) }); ruleDialog.value = false; await load(); ElMessage.success("规则已保存"); }
-async function removeMember() { if (!editingMemberId.value) return; await ElMessageBox.confirm("仅未被凭证使用的成员可以删除，确认继续？", "删除成员"); await api.delete(`/dimensions/members/${editingMemberId.value}`); memberDialog.value = false; await load(); ElMessage.success("成员已删除"); }
+async function removeMember() {
+  if (!editingMemberId.value) return;
+  try {
+    await ElMessageBox.confirm("仅未被凭证使用的成员可以删除，确认继续？", "删除成员");
+  } catch {
+    return;
+  }
+  await api.delete(`/dimensions/members/${editingMemberId.value}`);
+  memberDialog.value = false;
+  await load();
+  ElMessage.success("成员已删除");
+}
 async function removeRule(row: any) { await api.delete(`/dimensions/rules/${row.id}`); await load(); ElMessage.success("规则已删除"); }
 onMounted(load);
 </script>

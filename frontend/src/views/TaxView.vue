@@ -53,10 +53,41 @@ async function prepare(type: TaxType) {
 }
 async function inspect(row: any) { active.value = await api.get(`/tax/declarations/${row.id}`); detailVisible.value = true; }
 function exportDraft() { if (active.value) return api.download(`/tax/declarations/${active.value.id}/export.xlsx`, `税务填报底稿_${taxTypeLabel[active.value.taxType as TaxType]}_${active.value.fiscalYear}.xlsx`); }
-async function adjust(line: any) { if (!active.value) return; const isRate = line.lineCode.includes("RATE") || line.lineCode === "TAX_RATE"; const result = await ElMessageBox.prompt(`调整 ${line.lineName}，可填${isRate ? "百分数" : "正数或负数"}`, "税务申报调整", { inputValue: isRate ? String(Number(line.adjustment) * 100) : String(line.adjustment), inputPattern: /^-?\d{1,15}(?:\.\d{1,4})?$/, inputErrorMessage: isRate ? "百分数格式无效" : "金额格式无效" }); const adjustmentAmount = isRate ? String(Number(result.value) / 100) : result.value; active.value = await api.put(`/tax/declarations/${active.value.id}/lines`, { lines: [{ lineCode: line.lineCode, adjustmentAmount }] }); await load(); }
+async function adjust(line: any) {
+  if (!active.value) return;
+  const isRate = line.lineCode.includes("RATE") || line.lineCode === "TAX_RATE";
+  let result: any;
+  try {
+    result = await ElMessageBox.prompt(`调整 ${line.lineName}，可填${isRate ? "百分数" : "正数或负数"}`, "税务申报调整", { inputValue: isRate ? String(Number(line.adjustment) * 100) : String(line.adjustment), inputPattern: /^-?\d{1,15}(?:\.\d{1,4})?$/, inputErrorMessage: isRate ? "百分数格式无效" : "金额格式无效" });
+  } catch {
+    return;
+  }
+  const adjustmentAmount = isRate ? String(Number(result.value) / 100) : result.value;
+  active.value = await api.put(`/tax/declarations/${active.value.id}/lines`, { lines: [{ lineCode: line.lineCode, adjustmentAmount }] });
+  await load();
+}
 async function review() { active.value = await api.post(`/tax/declarations/${active.value.id}/review`); await load(); }
-async function declare() { const result = await ElMessageBox.prompt("填写电子税务局返回的实际申报编号或回执编号", "登记税务申报", { inputPattern: /\S+/, inputErrorMessage: "编号不能为空" }); active.value = await api.post(`/tax/declarations/${active.value.id}/declare`, { declarationNo: result.value }); await load(); }
-async function pay() { const amount = money(active.value.declaredAmount); const result = await ElMessageBox.prompt("填写本次缴款金额", "登记税款缴纳", { inputValue: amount, inputPattern: /^\d{1,15}(?:\.\d{1,4})?$/, inputErrorMessage: "金额格式无效" }); active.value = await api.post(`/tax/declarations/${active.value.id}/payments`, { amount: result.value, paymentDate: todayBusinessDate() }); await load(); }
+async function declare() {
+  let result: any;
+  try {
+    result = await ElMessageBox.prompt("填写电子税务局返回的实际申报编号或回执编号", "登记税务申报", { inputPattern: /\S+/, inputErrorMessage: "编号不能为空" });
+  } catch {
+    return;
+  }
+  active.value = await api.post(`/tax/declarations/${active.value.id}/declare`, { declarationNo: result.value });
+  await load();
+}
+async function pay() {
+  const amount = money(active.value.declaredAmount);
+  let result: any;
+  try {
+    result = await ElMessageBox.prompt("填写本次缴款金额", "登记税款缴纳", { inputValue: amount, inputPattern: /^\d{1,15}(?:\.\d{1,4})?$/, inputErrorMessage: "金额格式无效" });
+  } catch {
+    return;
+  }
+  active.value = await api.post(`/tax/declarations/${active.value.id}/payments`, { amount: result.value, paymentDate: todayBusinessDate() });
+  await load();
+}
 function changeType(next: "MONTH" | "QUARTER" | "YEAR") { if (next !== "YEAR") { const selectedMonth = lastPeriodType.value === "MONTH" ? period.value : lastPeriodType.value === "QUARTER" ? period.value * 3 : Number(todayBusinessDate().slice(5, 7)); period.value = next === "MONTH" ? selectedMonth : Math.ceil(selectedMonth / 3); } lastPeriodType.value = next; load(); }
 onMounted(async () => { const profile = await api.get<any>("/company-profile"); taxProfile.value = profile; simpleMode.value = (profile?.operationMode ?? "SIMPLE") === "SIMPLE"; if (profile?.vatFilingPeriod === "QUARTER") { periodType.value = "QUARTER"; period.value = Math.ceil(Number(todayBusinessDate().slice(5, 7)) / 3); lastPeriodType.value = "QUARTER"; } await load(); });
 </script>

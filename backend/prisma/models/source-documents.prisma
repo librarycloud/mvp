@@ -67,6 +67,7 @@ model BankTransaction {
   @@index([transactionTime])
   @@index([transactionDate])
   @@index([voucherId])
+  @@index([voucherId, transactionDate])
   @@index([voucherId, amount, deletedAt]) // P1 修复：AR/AP银行流水匹配查询（未核销+金额过滤）
   @@index([importBatchId])
   @@index([directionConfirmedById])
@@ -122,6 +123,8 @@ model Invoice {
   @@unique([sellerIdNum, invoiceNumber])
   @@index([buyerIdNum, issueTime])
   @@index([issueDate])
+  @@index([direction, issueDate])
+  @@index([status, issueDate])
   @@index([voucherId])
   @@index([reimbursementId])
   @@index([taxDeductionStatus])

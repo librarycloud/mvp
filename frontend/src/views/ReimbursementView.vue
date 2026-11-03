@@ -31,6 +31,7 @@ const availableBankTransactions = ref<any[]>([]);
 const invoiceLoading = ref(false);
 const summary = ref<any>({});
 const loading = ref(false);
+const submitting = ref(false);
 const dialogVisible = ref(false);
 const detailVisible = ref(false);
 const voucherDetailVisible = ref(false);
@@ -198,22 +199,28 @@ function updateInvoiceTotal() {
   form.amount = invoiceTotal.value ? invoiceTotal.value.toFixed(2) : "";
 }
 async function save() {
+  if (submitting.value) return;
   if (!form.expenseType) return ElMessage.warning("请选择费用类型");
   if (!Number(form.amount) || Number(form.amount) <= 0) return ElMessage.warning("请填写大于零的报销金额");
   if (isInvoiceEvidence.value && !form.invoiceIds.length) return ElMessage.warning("请至少选择一张已导入发票");
   if (isInvoiceEvidence.value && Number(form.amount || 0) > invoiceTotal.value) return ElMessage.warning("报销金额不能超过发票合计金额");
   if (!isInvoiceEvidence.value && !form.evidenceDescription.trim()) return ElMessage.warning(form.evidenceType === EVIDENCE_TYPE.NO_INVOICE ? "请填写无票原因" : "请填写其他凭证说明");
-  const invoiceIds = isInvoiceEvidence.value ? form.invoiceIds : [];
-  const invoiceTaxTreatments = isInvoiceEvidence.value ? form.invoiceIds.map(invoiceId => ({ invoiceId, ...taxTreatments[invoiceId] })) : [];
-  const payload = { ...form, invoiceIds, invoiceTaxTreatments };
-  const saved = formId.value
-    ? await api.put<any>(`/reimbursements/${formId.value}`, payload)
-    : await api.post<any>("/reimbursements", payload);
-  formId.value = saved.id;
-  if (stagedFiles.value.length) await uploadStagedFiles(saved.id);
-  dialogVisible.value = false;
-  ElMessage.success("报销单已保存");
-  await load();
+  submitting.value = true;
+  try {
+    const invoiceIds = isInvoiceEvidence.value ? form.invoiceIds : [];
+    const invoiceTaxTreatments = isInvoiceEvidence.value ? form.invoiceIds.map(invoiceId => ({ invoiceId, ...taxTreatments[invoiceId] })) : [];
+    const payload = { ...form, invoiceIds, invoiceTaxTreatments };
+    const saved = formId.value
+      ? await api.put<any>(`/reimbursements/${formId.value}`, payload)
+      : await api.post<any>("/reimbursements", payload);
+    formId.value = saved.id;
+    if (stagedFiles.value.length) await uploadStagedFiles(saved.id);
+    dialogVisible.value = false;
+    ElMessage.success("报销单已保存");
+    await load();
+  } finally {
+    submitting.value = false;
+  }
 }
 async function transition(row: any, action: string, message: string, body?: unknown) { await api.post(`/reimbursements/${row.id}/${action}`, body); ElMessage.success(message); await load(); }
 async function showDetail(row: any) { active.value = await api.get(`/reimbursements/${row.id}`); await loadAttachments(row.id); detailVisible.value = true; }
@@ -259,19 +266,25 @@ async function cancelPayment(row: any) {
 }
 async function openPay(row: any) { active.value = row; Object.assign(payForm, { paymentDate: todayBusinessDate(), expenseAccountId: "", inputTaxAccountId: "", paymentAccountId: "", bankTransactionId: "", remark: "" }); availableBankTransactions.value = await api.get<any[]>(`/reimbursements/${row.id}/available-bank-transactions`); payVisible.value = true; }
 async function pay() {
+  if (submitting.value) return;
   if (!payForm.paymentDate) return ElMessage.warning("请选择付款日期");
   if (!payForm.expenseAccountId) return ElMessage.warning("请选择费用或资产科目");
   if (!payForm.paymentAccountId) return ElMessage.warning("请选择付款科目");
   if (activeDeductibleTaxTotal.value > 0 && !payForm.inputTaxAccountId) return ElMessage.warning("请选择进项税额科目");
-  const { inputTaxAccountId, bankTransactionId, ...base } = payForm;
-  await api.post(`/reimbursements/${active.value.id}/pay`, {
-    ...base,
-    ...(inputTaxAccountId ? { inputTaxAccountId } : {}),
-    ...(bankTransactionId ? { bankTransactionId } : {}),
-  });
-  payVisible.value = false;
-  ElMessage.success("报销已付款，凭证已生成");
-  await load();
+  submitting.value = true;
+  try {
+    const { inputTaxAccountId, bankTransactionId, ...base } = payForm;
+    await api.post(`/reimbursements/${active.value.id}/pay`, {
+      ...base,
+      ...(inputTaxAccountId ? { inputTaxAccountId } : {}),
+      ...(bankTransactionId ? { bankTransactionId } : {}),
+    });
+    payVisible.value = false;
+    ElMessage.success("报销已付款，凭证已生成");
+    await load();
+  } finally {
+    submitting.value = false;
+  }
 }
 
 onMounted(async () => {
@@ -403,7 +416,7 @@ onBeforeUnmount(closeAttachmentPreview);
           </el-table>
         </template>
       </el-form>
-      <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
+      <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" :loading="submitting" :disabled="submitting" @click="save">保存</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="payVisible" title="报销付款" width="560px">
@@ -420,7 +433,7 @@ onBeforeUnmount(closeAttachmentPreview);
         </el-descriptions>
         <el-form-item label="备注"><el-input v-model="payForm.remark"/></el-form-item>
       </el-form>
-      <template #footer><el-button @click="payVisible=false">取消</el-button><el-button type="primary" @click="pay">确认付款并记账</el-button></template>
+      <template #footer><el-button @click="payVisible=false">取消</el-button><el-button type="primary" :loading="submitting" :disabled="submitting" @click="pay">确认付款并记账</el-button></template>
     </el-dialog>
 
     <el-drawer v-model="detailVisible" title="报销详情" size="65%">

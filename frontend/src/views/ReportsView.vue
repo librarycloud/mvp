@@ -80,17 +80,6 @@ function exportFile(format: "xlsx" | "pdf") {
   if (report.value) return api.download(`/reports/${report.value.id}/export.${format}`, `${report.value.template.name}-${String(report.value.periodStart).slice(0, 10)}.${format}`);
 }
 
-const equityExporting = ref(false);
-async function exportEquityChangeStatement() {
-  equityExporting.value = true;
-  try {
-    await generate("equity-change-statement");
-    await exportFile("xlsx");
-  } finally {
-    equityExporting.value = false;
-  }
-}
-
 const drillDownLoading = ref(false);
 const drillDownData = ref<any>(null);
 
@@ -166,7 +155,6 @@ onMounted(async () => {
         <p>按数据库模板从已记账凭证生成，支持月报、季报和年报。点击报表行可穿透溯源会计科目及明细账。</p>
       </div>
       <div class="toolbar">
-        <el-button :loading="equityExporting || loading" @click="exportEquityChangeStatement">导出所有者权益变动表</el-button>
         <el-button v-if="report" @click="exportFile('xlsx')">导出 Excel</el-button>
         <el-button v-if="report" @click="exportFile('pdf')">导出 PDF</el-button>
         <el-select v-model="periodType" style="width: 85px" @change="changeType">
