@@ -84,7 +84,18 @@ async function load() {
     loading.value = false;
   }
 }
-async function loadSupport() { [customers.value, suppliers.value, accounts.value, followUps.value] = await Promise.all([api.get<any[]>("/ar-ap/customers"), api.get<any[]>("/ar-ap/suppliers"), api.get<any[]>("/accounts"), api.get<any[]>("/ar-ap/follow-ups?due=all&status=0")]); }
+async function loadSupport() {
+  const [c, s, a, f] = await Promise.all([
+    api.get<any[]>("/ar-ap/customers"),
+    api.get<any[]>("/ar-ap/suppliers"),
+    api.get<any[]>("/accounts?tree=false&isEnabled=true"),
+    api.get<any[]>("/ar-ap/follow-ups?due=all&status=0"),
+  ]);
+  customers.value = c;
+  suppliers.value = s;
+  accounts.value = a.filter((acc: any) => acc.isLeaf && acc.isEnabled);
+  followUps.value = f;
+}
 function switchMode() { resetPage(); load(); }
 function openParty() { party.value = { code: "", name: "", contact: "", phone: "", creditLimit: "" }; partyDialog.value = true; }
 function openDocument() { documentForm.value = { partyId: "", documentNo: "", occurrenceDate: todayBusinessDate(), dueDate: "", amount: "", currency: "CNY", description: "" }; documentDialog.value = true; }

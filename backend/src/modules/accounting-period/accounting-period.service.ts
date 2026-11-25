@@ -26,6 +26,39 @@ export class AccountingPeriodService implements AccountingPeriodResolver {
     }
   }
 
+  async createYear(year: number, actor: AccountingPeriodActor) {
+    this.assertAdmin(actor);
+    this.assertYearMonth(year, 1);
+    const existing = (await this.repository.list({ year })) as Array<{ month: number }>;
+    const existingMonths = new Set(existing.map((item) => item.month));
+    const created: unknown[] = [];
+    let skippedCount = 0;
+
+    for (let month = 1; month <= 12; month++) {
+      if (existingMonths.has(month)) {
+        skippedCount++;
+        continue;
+      }
+      try {
+        const period = await this.create(year, month, actor);
+        created.push(period);
+      } catch (error) {
+        if (error instanceof AppError && error.code === "ACCOUNTING_PERIOD_EXISTS") {
+          skippedCount++;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    return {
+      year,
+      createdCount: created.length,
+      skippedCount,
+      periods: created,
+    };
+  }
+
   async update(id: number, input: { year?: number; month?: number; startDate?: string; endDate?: string }, actor: AccountingPeriodActor) {
     this.assertAdmin(actor);
     const current = await this.require(id);

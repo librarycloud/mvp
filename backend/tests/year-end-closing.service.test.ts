@@ -115,4 +115,57 @@ describe("YearEndClosingService", () => {
     expect(result.voidedCount).toBe(1);
     expect(updatedVouchers[0]?.data.status).toBe(3); // VOUCHER_STATUS.VOID
   });
+
+  it("transfers 4103 monthly closed balance to 4104 retained earnings during annual closing", async () => {
+    let createdVoucherData: any;
+    const periods12 = Array.from({ length: 12 }, (_, idx) => ({
+      id: idx + 1,
+      year: 2026,
+      month: idx + 1,
+      status: 1,
+      endDate: new Date(Date.UTC(2026, idx + 1, 0)),
+    }));
+    const mockTx = {
+      yearEndClosing: {
+        findFirst: async () => null,
+        create: async ({ data }: any) => ({ id: 55, ...data }),
+      },
+      accountingPeriod: { findMany: async () => periods12 },
+      voucherEntry: {
+        findMany: async () => [
+          {
+            accountId: 4103,
+            debitAmount: new Prisma.Decimal(0),
+            creditAmount: new Prisma.Decimal("8000"),
+            account: { id: 4103, code: "4103", name: "本年利润", category: "EQUITY", normalDirection: "CREDIT" },
+          },
+        ],
+      },
+      dictionaryItem: { findMany: async () => [] },
+      account: {
+        findFirst: async ({ where }: any) => {
+          if (where.id === 4103) return { id: 4103, code: "4103", name: "本年利润" };
+          if (where.id === 4104) return { id: 4104, code: "4104", name: "利润分配" };
+          return null;
+        },
+      },
+      $executeRaw: async () => 1,
+      $queryRaw: async () => [{ next_value: 9 }],
+      voucherSequence: { update: async () => ({}) },
+      voucher: {
+        create: async ({ data }: any) => {
+          createdVoucherData = data;
+          return { id: 900, ...data };
+        },
+      },
+      accountingEvent: { create: async () => ({ id: 77 }) },
+      auditLog: { create: async () => ({}) },
+    };
+    const service = new YearEndClosingService({ $transaction: async (fn: any) => fn(mockTx) } as any);
+    const closing = await service.close(2026, { profitAccountId: 4103, retainedEarningsAccountId: 4104 }, { actorId: 1, role: "ADMIN" });
+    expect(closing.netProfit.toString()).toBe("8000");
+    expect(createdVoucherData.entries.create).toHaveLength(2);
+    expect(createdVoucherData.entries.create[0]).toMatchObject({ accountId: 4103, debitAmount: new Prisma.Decimal("8000") });
+    expect(createdVoucherData.entries.create[1]).toMatchObject({ accountId: 4104, creditAmount: new Prisma.Decimal("8000") });
+  });
 });

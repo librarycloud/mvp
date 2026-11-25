@@ -72,10 +72,6 @@ export class YearEndClosingService {
       }
 
       const preview = await this.buildPreview(fiscalYear, tx);
-      if (!preview.lines.length) {
-        throw new AppError("YEAR_END_NOTHING_TO_CLOSE", "本年度没有可结转的损益数据", 409);
-      }
-
       const profit = await tx.account.findFirst({
         where: { id: input.profitAccountId, deletedAt: null, isEnabled: true, isLeaf: true },
       });
@@ -83,10 +79,22 @@ export class YearEndClosingService {
         throw new AppError("ACCOUNT_NOT_POSTABLE", "本年利润科目不存在、未启用或不是末级科目", 400);
       }
 
-      const sequence = await getNextVoucherNumber(tx, fiscalYear);
-      const summary = `${fiscalYear}年度损益结转`;
+      let retainedEarnings: { id: number; code: string; name: string } | null = null;
+      if (input.retainedEarningsAccountId) {
+        if (input.retainedEarningsAccountId === profit.id) {
+          throw new AppError("INVALID_CLOSING_ACCOUNTS", "本年利润科目与未分配利润科目不能相同", 400);
+        }
+        retainedEarnings = await tx.account.findFirst({
+          where: { id: input.retainedEarningsAccountId, deletedAt: null, isEnabled: true, isLeaf: true },
+          select: { id: true, code: true, name: true },
+        });
+        if (!retainedEarnings) {
+          throw new AppError("ACCOUNT_NOT_POSTABLE", "利润分配（未分配利润）科目不存在、未启用或不是末级科目", 400);
+        }
+      }
 
-      const entries = preview.lines.flatMap((line, index) =>
+      const summary = `${fiscalYear}年度损益及利润结转`;
+      const entries: Array<{ lineNo: number; accountId: number; summary: string; debitAmount: Prisma.Decimal; creditAmount: Prisma.Decimal }> = preview.lines.flatMap((line, index) =>
         line.normalDirection === "CREDIT"
           ? [
               { lineNo: index * 2 + 1, accountId: line.accountId, summary, debitAmount: line.amount, creditAmount: ZERO },
@@ -97,6 +105,29 @@ export class YearEndClosingService {
               { lineNo: index * 2 + 2, accountId: line.accountId, summary, debitAmount: ZERO, creditAmount: line.amount },
             ],
       );
+
+      const totalProfitToRetained = preview.alreadyClosedMonthlyProfit.plus(preview.netProfit);
+      if (retainedEarnings && !totalProfitToRetained.isZero()) {
+        const transferAmount = totalProfitToRetained.abs();
+        const distSummary = `${fiscalYear}年度本年利润结转未分配利润`;
+        if (totalProfitToRetained.greaterThan(0)) {
+          entries.push(
+            { lineNo: entries.length + 1, accountId: profit.id, summary: distSummary, debitAmount: transferAmount, creditAmount: ZERO },
+            { lineNo: entries.length + 2, accountId: retainedEarnings.id, summary: distSummary, debitAmount: ZERO, creditAmount: transferAmount },
+          );
+        } else {
+          entries.push(
+            { lineNo: entries.length + 1, accountId: retainedEarnings.id, summary: distSummary, debitAmount: transferAmount, creditAmount: ZERO },
+            { lineNo: entries.length + 2, accountId: profit.id, summary: distSummary, debitAmount: ZERO, creditAmount: transferAmount },
+          );
+        }
+      }
+
+      if (!entries.length) {
+        throw new AppError("YEAR_END_NOTHING_TO_CLOSE", "本年度没有可结转的损益或本年利润数据", 409);
+      }
+
+      const sequence = await getNextVoucherNumber(tx, fiscalYear);
 
       const total = entries
         .filter((x) => new Prisma.Decimal(x.debitAmount).greaterThan(0))
@@ -142,7 +173,8 @@ export class YearEndClosingService {
           revenueAmount: preview.revenueAmount.toString(),
           costAmount: preview.costAmount.toString(),
           expenseAmount: preview.expenseAmount.toString(),
-          netProfit: preview.netProfit.toString(),
+          netProfit: totalProfitToRetained.toString(),
+          alreadyClosedMonthlyProfit: preview.alreadyClosedMonthlyProfit.toString(),
         },
       };
 
@@ -152,7 +184,7 @@ export class YearEndClosingService {
           revenueAmount: preview.revenueAmount,
           costAmount: preview.costAmount,
           expenseAmount: preview.expenseAmount,
-          netProfit: preview.netProfit,
+          netProfit: totalProfitToRetained,
           eventId: event.id,
           voucherId: voucher.id,
           reportData: reportData as Prisma.InputJsonObject,
@@ -241,8 +273,12 @@ export class YearEndClosingService {
 
     const costCodes = new Set(costItems.map((item) => item.value));
     const totals = new Map<number, { account: any; debit: Prisma.Decimal; credit: Prisma.Decimal }>();
+    let alreadyClosedMonthlyProfit = ZERO;
 
     for (const entry of entries) {
+      if (entry.account.code?.startsWith("4103")) {
+        alreadyClosedMonthlyProfit = alreadyClosedMonthlyProfit.plus(entry.creditAmount).minus(entry.debitAmount);
+      }
       if (entry.account.category !== "PROFIT_AND_LOSS") continue;
       const current = totals.get(entry.accountId) ?? { account: entry.account, debit: ZERO, credit: ZERO };
       current.debit = current.debit.plus(entry.debitAmount);
@@ -286,12 +322,15 @@ export class YearEndClosingService {
       else expense = expense.plus(signed);
     }
 
+    const netProfit = revenue.minus(cost).minus(expense);
     return {
       lines: lines.sort((a, b) => a.code.localeCompare(b.code)),
       revenueAmount: revenue,
       costAmount: cost,
       expenseAmount: expense,
-      netProfit: revenue.minus(cost).minus(expense),
+      netProfit,
+      alreadyClosedMonthlyProfit,
+      totalTransferToRetained: alreadyClosedMonthlyProfit.plus(netProfit),
     };
   }
 

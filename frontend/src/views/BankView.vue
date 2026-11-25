@@ -49,6 +49,20 @@ const cmbConfig = reactive({
 
 const quickVoucherVisible = ref(false);
 const quickVoucherSaving = ref(false);
+const selectedTransactions = ref<any[]>([]);
+const batchVoucherVisible = ref(false);
+const batchVoucherSaving = ref(false);
+const batchVoucherItems = ref<Array<{
+  transactionId: number;
+  transactionTime: string;
+  counterparty: string;
+  amount: string;
+  isPositive: boolean;
+  bankAccountId: number | "";
+  counterAccountId: number | "";
+  summary: string;
+  ruleMatchedHint: string;
+}>>([]);
 const quickVoucherForm = reactive({
   transactionId: 0,
   voucherDate: "",
@@ -454,6 +468,7 @@ async function submitQuickVoucher() {
   try {
     const res = await api.post<any>(`/bank-transactions/${quickVoucherForm.transactionId}/generate-voucher`, {
       counterAccountId: Number(quickVoucherForm.counterAccountId),
+      ...(quickVoucherForm.bankAccountId ? { bankAccountId: Number(quickVoucherForm.bankAccountId) } : {}),
       summary: quickVoucherForm.summary.trim(),
     });
     ElMessage.success(`记账凭证【${res.voucherNo}】已自动生成并入账！`);
@@ -463,6 +478,71 @@ async function submitQuickVoucher() {
     // api client handles error toasts
   } finally {
     quickVoucherSaving.value = false;
+  }
+}
+
+function openBatchVoucherDialog() {
+  const unposted = selectedTransactions.value.filter((r) => r.postingStatus === "UNPOSTED");
+  if (!unposted.length) {
+    ElMessage.warning("请至少勾选一条未入账流水");
+    return;
+  }
+  const defaultBank = accounts.value.find((a) => a.code.startsWith("1002") && a.isLeaf) || accounts.value.find((a) => a.code.startsWith("1001") && a.isLeaf);
+  batchVoucherItems.value = unposted.map((row) => {
+    const isPositive = Number(row.amount) >= 0;
+    const matched = matchVoucherRule(row, isPositive);
+    const fallbackCounter = isPositive
+      ? accounts.value.find((a) => a.code.startsWith("1122") || a.code.startsWith("6001"))
+      : accounts.value.find((a) => a.code.startsWith("6602") || a.code.startsWith("2202"));
+    return {
+      transactionId: row.id,
+      transactionTime: row.transactionTime,
+      counterparty: isPositive ? (row.payerName || row.summary || row.transactionNo) : (row.payeeName || row.summary || row.transactionNo),
+      amount: formatMoney(row.amount),
+      isPositive,
+      bankAccountId: defaultBank?.id ?? "",
+      counterAccountId: matched?.accountId ?? fallbackCounter?.id ?? "",
+      summary: matched?.summary || row.summary || (isPositive ? `收到 ${row.payerName || "银行转入款"}` : `支付 ${row.payeeName || "银行转出款"}`),
+      ruleMatchedHint: matched ? matched.source : "默认匹配",
+    };
+  });
+  batchVoucherVisible.value = true;
+}
+
+async function submitBatchVouchers() {
+  if (batchVoucherSaving.value) return;
+  const incomplete = batchVoucherItems.value.find((item) => !item.counterAccountId || !item.summary.trim());
+  if (incomplete) {
+    ElMessage.warning(`流水「${incomplete.counterparty}」缺少对应业务科目或摘要，请补充完整`);
+    return;
+  }
+  batchVoucherSaving.value = true;
+  let successCount = 0;
+  const failures: string[] = [];
+  try {
+    for (const item of batchVoucherItems.value) {
+      try {
+        await api.post<any>(`/bank-transactions/${item.transactionId}/generate-voucher`, {
+          counterAccountId: Number(item.counterAccountId),
+          ...(item.bankAccountId ? { bankAccountId: Number(item.bankAccountId) } : {}),
+          summary: item.summary.trim(),
+        });
+        successCount++;
+      } catch (err: any) {
+        const msg = err?.response?.data?.error?.message ?? err?.message ?? "生成失败";
+        failures.push(`${item.counterparty}：${msg}`);
+      }
+    }
+    if (failures.length) {
+      ElMessage.warning(`成功生成 ${successCount} 笔凭证，失败 ${failures.length} 笔（${failures[0]}）`);
+    } else {
+      ElMessage.success(`已成功批量生成并入账 ${successCount} 笔凭证`);
+    }
+    batchVoucherVisible.value = false;
+    selectedTransactions.value = [];
+    await load();
+  } finally {
+    batchVoucherSaving.value = false;
   }
 }
 
@@ -649,6 +729,13 @@ onMounted(() => {
           <el-radio-button label="journal">出纳日记账</el-radio-button>
         </el-radio-group>
         <template v-if="activeViewTab === 'transactions'">
+          <el-button
+            v-if="selectedTransactions.length"
+            type="success"
+            @click="openBatchVoucherDialog"
+          >
+            批量智能生单 ({{ selectedTransactions.length }})
+          </el-button>
           <el-button @click="exportTransactions">导出 Excel</el-button>
           <el-button @click="openRulesDialog">智能记账规则</el-button>
           <el-button type="primary" plain @click="fetchDialogVisible = true">招商银行接口拉取</el-button>
@@ -718,7 +805,8 @@ onMounted(() => {
       </el-card>
 
       <el-card shadow="never">
-        <el-table table-layout="auto" v-loading="loading" :data="rows" stripe>
+        <el-table table-layout="auto" v-loading="loading" :data="rows" stripe @selection-change="selectedTransactions = $event">
+          <el-table-column type="selection" width="46" :selectable="(row: any) => row.postingStatus === 'UNPOSTED'" />
           <el-table-column label="交易时间" min-width="160"><template #default="{ row }">{{ formatOperationTime(row.transactionTime) }}</template></el-table-column>
           <el-table-column prop="transactionNo" label="流水号" min-width="170" show-overflow-tooltip/>
           <el-table-column prop="payerName" label="付方" min-width="150" show-overflow-tooltip/>
@@ -905,6 +993,63 @@ onMounted(() => {
       <template #footer>
         <el-button @click="quickVoucherVisible = false">取消</el-button>
         <el-button type="primary" :loading="quickVoucherSaving" @click="submitQuickVoucher">确认生成并入账</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 批量智能认领生单对话框 -->
+    <el-dialog v-model="batchVoucherVisible" title="批量智能认领生成记账凭证" width="min(960px, calc(100% - 24px))" destroy-on-close>
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 14px"
+        title="系统已根据内置及自定义规则自动预匹配对应业务科目和摘要，您可在下方表格直接微调后一键批量生单入账。"
+      />
+      <el-table :data="batchVoucherItems" border stripe max-height="420" table-layout="auto">
+        <el-table-column label="交易时间" width="115">
+          <template #default="{ row }">{{ formatOperationTime(row.transactionTime).slice(0, 10) }}</template>
+        </el-table-column>
+        <el-table-column prop="counterparty" label="对方/原摘要" min-width="150" show-overflow-tooltip />
+        <el-table-column label="金额" width="110" align="right">
+          <template #default="{ row }">
+            <span :class="row.isPositive ? 'amount-in' : 'amount-out'">{{ row.amount }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="匹配规则" width="145" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.ruleMatchedHint === '默认匹配' ? 'info' : 'success'">{{ row.ruleMatchedHint }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="银行科目" min-width="165">
+          <template #default="{ row }">
+            <el-select v-model="row.bankAccountId" size="small" filterable style="width: 100%">
+              <el-option
+                v-for="acc in accounts.filter(a => a.code.startsWith('1001') || a.code.startsWith('1002'))"
+                :key="acc.id"
+                :label="`${acc.code} ${acc.name}`"
+                :value="acc.id"
+              />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column label="对应业务科目" min-width="190">
+          <template #default="{ row }">
+            <el-select v-model="row.counterAccountId" size="small" filterable style="width: 100%">
+              <el-option v-for="acc in accounts" :key="acc.id" :label="`${acc.code} ${acc.name}`" :value="acc.id" />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column label="凭证摘要" min-width="180">
+          <template #default="{ row }">
+            <el-input v-model="row.summary" size="small" />
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="batchVoucherVisible = false">取消</el-button>
+        <el-button type="primary" :loading="batchVoucherSaving" :disabled="batchVoucherSaving" @click="submitBatchVouchers">
+          确认批量生成并入账 ({{ batchVoucherItems.length }} 笔)
+        </el-button>
       </template>
     </el-dialog>
 

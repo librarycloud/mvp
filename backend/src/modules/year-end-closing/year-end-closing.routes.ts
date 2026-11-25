@@ -18,7 +18,13 @@ export async function yearEndClosingRoutes(app: FastifyInstance, o: { controller
   app.get("/:year", { ...secure, schema: { params }, handler: o.controller.get });
   app.post("/:year", {
     ...secure,
-    schema: { params, body: Type.Object({ profitAccountId: Type.Integer({ minimum: 1 }) }) },
+    schema: {
+      params,
+      body: Type.Object({
+        profitAccountId: Type.Integer({ minimum: 1 }),
+        retainedEarningsAccountId: Type.Optional(Type.Integer({ minimum: 1 })),
+      }),
+    },
     handler: o.controller.close,
   });
   app.post("/:year/cancel", {

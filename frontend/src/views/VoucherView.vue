@@ -361,6 +361,30 @@ async function openCopy(row: any) {
   visible.value = true;
 }
 
+async function openReverse(row: any) {
+  const source = await api.get<any>(`/vouchers/${row.id}`);
+  const today = todayBusinessDate();
+  editingId.value = "";
+  categoryManuallySelected.value = true;
+  accountFilterQuery.value = "";
+  const reverseSummary = source.summary?.startsWith("[冲销") ? source.summary : `[冲销 ${source.voucherNo}] ${source.summary}`;
+  Object.assign(form, {
+    voucherDate: today,
+    postingDate: today,
+    summary: reverseSummary.slice(0, 500),
+    category: source.category ?? "OTHER",
+    entries: source.entries.map((entry: any) => ({
+      accountId: entry.accountId,
+      summary: entry.summary ? `冲销：${entry.summary}`.slice(0, 500) : reverseSummary.slice(0, 500),
+      debitAmount: entry.creditAmount,
+      creditAmount: entry.debitAmount,
+      dimensionMemberIds: (entry.dimensions ?? []).map((item: any) => item.dimensionMemberId),
+    })),
+  });
+  ElMessage.info("已按原凭证生成借贷反向冲销分录，确认日期后保存即可");
+  visible.value = true;
+}
+
 async function showDetail(rowOrId: any) {
   const id = typeof rowOrId === "number" ? rowOrId : rowOrId.id;
   detail.value = await api.get<any>(`/vouchers/${id}`);
@@ -641,7 +665,7 @@ onUnmounted(() => {
     <section class="page-heading">
       <div>
         <h2>会计凭证</h2>
-        <p>凭证审核通过并记账后进入账簿和报表。支持负数红字冲销、键盘快捷找平与标准凭证套打。</p>
+        <p>凭证审核通过并记账后进入账簿和报表。支持一键反向冲销、键盘快捷找平与标准凭证套打。</p>
       </div>
       <div class="toolbar">
         <template v-if="selectedRows.length">
@@ -730,6 +754,7 @@ onUnmounted(() => {
             <el-button link @click="showDetail(row)">查看</el-button>
             <el-button link @click="openPrint(row)">打印</el-button>
             <el-button link @click="openCopy(row)">复制</el-button>
+            <el-button v-if="row.status === VOUCHER_STATUS.POSTED" link type="warning" @click="openReverse(row)">冲销</el-button>
             <el-button v-if="row.status === VOUCHER_STATUS.DRAFT" link type="primary" :disabled="periodLocked(row)" @click="openEdit(row)">编辑</el-button>
             <el-button v-if="row.status === VOUCHER_STATUS.DRAFT" link type="danger" :disabled="periodLocked(row) || sourceManaged(row)" @click="removeDraft(row)">删除</el-button>
             <el-button v-if="row.status === VOUCHER_STATUS.DRAFT" link type="primary" :disabled="periodLocked(row)" @click="transition(row, 'submit', '已提交审核')">提交审核</el-button>

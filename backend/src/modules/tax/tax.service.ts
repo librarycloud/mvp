@@ -184,20 +184,21 @@ export class TaxService {
       const outputTax = outputLine?.declared ?? ZERO;
 
       if (outputTax.greaterThan(0) && payableAmount.isZero()) {
-        risks.push({
-          ruleCode: "VAT_ZERO_DECLARATION",
-          ruleName: "有销项零申报风险",
-          level: "WARN",
-          message: `本期销项税额 ¥${outputTax.toString()}，但申报应缴税款为 0（被进项完全抵扣），可能引发税务局进项过度抵扣预警`,
-        });
+        risks.push(
+          {
+            ruleCode: "VAT_ZERO_DECLARATION",
+            ruleName: "有销项零申报风险",
+            level: "WARN",
+            message: `本期销项税额 ¥${outputTax.toString()}，但申报应缴税款为 0（被进项完全抵扣），可能引发税务局进项过度抵扣预警`,
+          },
+          {
+            ruleCode: "VAT_ZERO_PAYABLE",
+            ruleName: "销项税额被抵扣或调整为零",
+            level: "INFO",
+            message: "系统仅基于发票台账测算；请核对留抵、减免和申报表口径后再填报。",
+          },
+        );
       }
-
-      if (outputTax.greaterThan(0) && payableAmount.isZero()) risks.push({
-        ruleCode: "VAT_ZERO_PAYABLE",
-        ruleName: "销项税额被抵扣或调整为零",
-        level: "INFO",
-        message: "系统仅基于发票台账测算；请核对留抵、减免和申报表口径后再填报。",
-      });
     } else if (declaration.taxType === "CORPORATE_INCOME") {
       if (payableAmount.isZero()) {
         risks.push({
@@ -255,17 +256,32 @@ export class TaxService {
         where: { code: { startsWith: "1002" }, deletedAt: null, isEnabled: true, isLeaf: true },
         select: { id: true },
       });
-      let taxAccountCodePrefix = "2221";
-      if (declaration.taxType === "VAT") taxAccountCodePrefix = "222101";
-      else if (declaration.taxType === "CORPORATE_INCOME") taxAccountCodePrefix = "222102";
-      else if (declaration.taxType === "SURCHARGE") taxAccountCodePrefix = "222103";
-      const taxAccount = await (tx as any).account.findFirst({
-        where: { code: { startsWith: taxAccountCodePrefix }, deletedAt: null, isEnabled: true, isLeaf: true },
-        select: { id: true },
-      }) ?? await (tx as any).account.findFirst({
-        where: { code: { startsWith: "2221" }, deletedAt: null, isEnabled: true, isLeaf: true },
-        select: { id: true },
-      });
+      const findLeafTaxAccount = async (codes: string[]) => {
+        for (const code of codes) {
+          const exact = await (tx as any).account.findFirst({
+            where: { code, deletedAt: null, isEnabled: true, isLeaf: true },
+            select: { id: true },
+          });
+          if (exact) return exact;
+          const byPrefix = await (tx as any).account.findFirst({
+            where: { code: { startsWith: code }, deletedAt: null, isEnabled: true, isLeaf: true },
+            orderBy: { code: "asc" },
+            select: { id: true },
+          });
+          if (byPrefix) return byPrefix;
+        }
+        return (tx as any).account.findFirst({
+          where: { code: { startsWith: "2221" }, deletedAt: null, isEnabled: true, isLeaf: true },
+          orderBy: { code: "asc" },
+          select: { id: true },
+        });
+      };
+      const preferredCodes = declaration.taxType === "VAT"
+        ? ["22210103", "222102", "222101"]
+        : declaration.taxType === "CORPORATE_INCOME"
+          ? ["222115", "222199"]
+          : ["222112", "222113", "222114", "222199"];
+      const taxAccount = await findLeafTaxAccount(preferredCodes);
       if (!bankAccount || !taxAccount) throw new AppError("TAX_PAYMENT_ACCOUNTS_REQUIRED", "缺少可用的银行存款或应交税费科目，无法登记缴款", 409);
 
       const sequence = await getNextVoucherNumber(tx as any, period.year);
@@ -338,16 +354,53 @@ export class TaxService {
       const eduTax = vatPayable.mul(profile.educationSurchargeRate).mul(reductionFactor).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
       const localEduTax = vatPayable.mul(profile.localEducationSurchargeRate).mul(reductionFactor).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
       const totalSurcharges = urbanTax.plus(eduTax).plus(localEduTax);
+      if (totalSurcharges.lessThanOrEqualTo(ZERO)) {
+        throw new AppError("NO_VAT_PAYABLE_FOR_SURCHARGES", "附加税费测算金额为零，无需生成计提凭证", 400);
+      }
 
-      const taxExpenseAcc = await tx.account.findFirst({ where: { code: "6403", deletedAt: null } }) ??
-        await tx.account.findFirst({ where: { code: { startsWith: "6403" }, deletedAt: null } });
-      const taxPayableAcc = await tx.account.findFirst({ where: { code: { startsWith: "222103" }, deletedAt: null } }) ??
-        await tx.account.findFirst({ where: { code: { startsWith: "2221" }, deletedAt: null } });
+      const findLeaf = async (codes: string[]) => {
+        for (const code of codes) {
+          const exact = await tx.account.findFirst({ where: { code, deletedAt: null, isEnabled: true, isLeaf: true } });
+          if (exact) return exact;
+          const pref = await tx.account.findFirst({
+            where: { code: { startsWith: code }, deletedAt: null, isEnabled: true, isLeaf: true },
+            orderBy: { code: "asc" },
+          });
+          if (pref) return pref;
+        }
+        return null;
+      };
 
-      if (!taxExpenseAcc || !taxPayableAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未配置税金及附加或附加税应交科目", 400);
+      const taxExpenseAcc = await findLeaf(["6403"]);
+      const fallbackTaxPayableAcc = await findLeaf(["222199", "2221"]);
+      const urbanPayableAcc = (await findLeaf(["222112"])) ?? fallbackTaxPayableAcc;
+      const eduPayableAcc = (await findLeaf(["222113"])) ?? fallbackTaxPayableAcc;
+      const localEduPayableAcc = (await findLeaf(["222114"])) ?? fallbackTaxPayableAcc;
+
+      if (!taxExpenseAcc || !urbanPayableAcc || !eduPayableAcc || !localEduPayableAcc) {
+        throw new AppError("ACCOUNT_NOT_FOUND", "未配置税金及附加或附加税应交科目", 400);
+      }
 
       const sequence = await getNextVoucherNumber(tx as any, period.year);
       const summary = `计提${period.periodCode}城建税及附加税费`;
+      const surchargeEntries: Array<{ lineNo: number; accountId: number; summary: string; debitAmount: Prisma.Decimal; creditAmount: Prisma.Decimal }> = [
+        { lineNo: 1, accountId: taxExpenseAcc.id, summary, debitAmount: totalSurcharges, creditAmount: ZERO },
+      ];
+      const pushCreditLine = (accountId: number, label: string, amount: Prisma.Decimal) => {
+        if (amount.greaterThan(ZERO)) {
+          surchargeEntries.push({
+            lineNo: surchargeEntries.length + 1,
+            accountId,
+            summary: label,
+            debitAmount: ZERO,
+            creditAmount: amount,
+          });
+        }
+      };
+      pushCreditLine(urbanPayableAcc.id, `计提城市维护建设税(${profile.urbanMaintenanceRate.mul(100).toString()}%)`, urbanTax);
+      pushCreditLine(eduPayableAcc.id, `计提教育费附加(${profile.educationSurchargeRate.mul(100).toString()}%)`, eduTax);
+      pushCreditLine(localEduPayableAcc.id, `计提地方教育附加(${profile.localEducationSurchargeRate.mul(100).toString()}%)`, localEduTax);
+
       const voucher = await (tx as any).voucher.create({
         data: {
           ...sequence,
@@ -368,12 +421,7 @@ export class TaxService {
           postedById: actor.actorId,
           postedAt: new Date(),
           entries: {
-            create: [
-              { lineNo: 1, accountId: taxExpenseAcc.id, summary, debitAmount: totalSurcharges, creditAmount: ZERO },
-              { lineNo: 2, accountId: taxPayableAcc.id, summary: "计提城市维护建设税(7%)", debitAmount: ZERO, creditAmount: urbanTax },
-              { lineNo: 3, accountId: taxPayableAcc.id, summary: "计提教育费附加(3%)", debitAmount: ZERO, creditAmount: eduTax },
-              { lineNo: 4, accountId: taxPayableAcc.id, summary: "计提地方教育附加(2%)", debitAmount: ZERO, creditAmount: localEduTax },
-            ],
+            create: surchargeEntries,
           },
         },
       });

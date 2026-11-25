@@ -155,8 +155,15 @@ describe("TaxService", () => {
     expect(result).toEqual(saved);
   });
 
-  it("accrues surcharges based on VAT payable", async () => {
+  it("accrues surcharges based on VAT payable using exact surcharge accounts and skips zero-rounded entries", async () => {
+    const accountsByCode: Record<string, { id: number; code: string; name: string }> = {
+      "6403": { id: 6403, code: "6403", name: "税金及附加" },
+      "222112": { id: 222112, code: "222112", name: "应交城市维护建设税" },
+      "222113": { id: 222113, code: "222113", name: "应交教育费附加" },
+      "222114": { id: 222114, code: "222114", name: "应交地方教育附加" },
+    };
     const mockTx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ next_value: 1 }]),
       accountingPeriod: {
         findFirst: vi.fn().mockResolvedValue({ id: 5, year: 2026, month: 7, periodCode: "2026-07", endDate: new Date("2026-07-31"), status: 0 }),
       },
@@ -166,12 +173,12 @@ describe("TaxService", () => {
         findFirst: vi.fn().mockResolvedValue({ id: 1, status: "DECLARED", declaredAmount: new Prisma.Decimal("10000") }),
       },
       account: {
-        findFirst: vi.fn()
-          .mockResolvedValueOnce({ id: 6403, code: "6403", name: "税金及附加" })
-          .mockResolvedValueOnce({ id: 222103, code: "222103", name: "应交税费-附加税" }),
+        findFirst: vi.fn().mockImplementation(({ where }: any) => {
+          const code = typeof where.code === "string" ? where.code : where.code?.startsWith;
+          return Promise.resolve(accountsByCode[code] ?? null);
+        }),
       },
       $executeRaw: vi.fn(),
-      $queryRaw: vi.fn().mockResolvedValue([{ next_value: 1 }]),
       voucherSequence: { update: vi.fn() },
       voucher: {
         create: vi.fn().mockImplementation((args) => ({ id: 99, ...args.data })),
@@ -188,6 +195,58 @@ describe("TaxService", () => {
     // 10000 * (7% + 3% + 2%) = 1200
     expect(voucher.totalDebit.toString()).toBe("1200");
     expect(voucher.totalCredit.toString()).toBe("1200");
+    expect(voucher.entries.create).toHaveLength(4);
+    expect(voucher.entries.create[1].accountId).toBe(222112);
+    expect(voucher.entries.create[2].accountId).toBe(222113);
+    expect(voucher.entries.create[3].accountId).toBe(222114);
+  });
+
+  it("skips zero-rounded surcharge credit entries and maps CIT payment to 222115", async () => {
+    const accountsByCode: Record<string, { id: number; code: string; name: string }> = {
+      "1002": { id: 1002, code: "1002", name: "银行存款" },
+      "6403": { id: 6403, code: "6403", name: "税金及附加" },
+      "222112": { id: 222112, code: "222112", name: "应交城市维护建设税" },
+      "222113": { id: 222113, code: "222113", name: "应交教育费附加" },
+      "222114": { id: 222114, code: "222114", name: "应交地方教育附加" },
+      "222115": { id: 222115, code: "222115", name: "应交企业所得税" },
+    };
+    const mockTx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ next_value: 2 }]),
+      accountingPeriod: {
+        findFirst: vi.fn().mockResolvedValue({ id: 5, year: 2026, month: 7, periodCode: "2026-07", endDate: new Date("2026-07-31"), status: 0 }),
+      },
+      accountingEvent: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
+      companyProfile: { findFirst: vi.fn().mockResolvedValue({ vatFilingPeriod: "MONTH", surchargeReductionEligible: "YES", urbanMaintenanceRate: new Prisma.Decimal("0.07"), educationSurchargeRate: new Prisma.Decimal("0.03"), localEducationSurchargeRate: new Prisma.Decimal("0.02"), surchargeReductionRate: new Prisma.Decimal("0.5") }) },
+      taxDeclaration: {
+        findFirst: vi.fn().mockResolvedValue({ id: 1, taxType: "CORPORATE_INCOME", status: "DECLARED", declaredAmount: new Prisma.Decimal("0.30"), declarationNo: "CIT-001", payments: [] }),
+        update: vi.fn(),
+      },
+      taxPayment: { create: vi.fn().mockResolvedValue({ id: 7 }) },
+      auditLog: { create: vi.fn() },
+      account: {
+        findFirst: vi.fn().mockImplementation(({ where }: any) => {
+          const code = typeof where.code === "string" ? where.code : where.code?.startsWith;
+          return Promise.resolve(accountsByCode[code] ?? null);
+        }),
+      },
+      $executeRaw: vi.fn(),
+      voucherSequence: { update: vi.fn() },
+      voucher: {
+        create: vi.fn().mockImplementation((args) => ({ id: 100, ...args.data })),
+      },
+    };
+    const prisma = { $transaction: vi.fn(async (fn) => fn(mockTx)) } as any;
+    const periods = { resolveOpenPeriod: vi.fn().mockResolvedValue({ id: 5, year: 2026, month: 7, periodCode: "2026-07" }) } as any;
+
+    const service = new TaxService(prisma, periods);
+    const accrualVoucher = await service.accrueSurcharges(5, { actorId: 1, role: "ADMIN" });
+    // 0.30 * 7% * 0.5 = 0.01; 0.30 * 3% * 0.5 = 0.00; 0.30 * 2% * 0.5 = 0.00 -> only 1 debit + 1 credit line
+    expect(accrualVoucher.totalDebit.toString()).toBe("0.01");
+    expect(accrualVoucher.entries.create).toHaveLength(2);
+
+    await service.pay(1, { amount: "0.30", paymentDate: "2026-07-15" }, 1);
+    const payVoucherCall = mockTx.voucher.create.mock.calls[1]?.[0]?.data;
+    expect(payVoucherCall.entries.create[0].accountId).toBe(222115);
   });
 
   it("does not record a tax payment when its accounting period is closed", async () => {

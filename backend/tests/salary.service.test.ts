@@ -76,5 +76,49 @@ describe("SalaryService", () => {
     );
     expect(zeroTax.toString()).toBe("0");
   });
+
+  it("exports an Excel import template prefilled with active employees", async () => {
+    const prisma = {
+      employee: {
+        findMany: vi.fn().mockResolvedValue([
+          { employeeNo: "E001", name: "张三", baseSalary: new Prisma.Decimal("10000"), socialInsurance: new Prisma.Decimal("800"), housingFund: new Prisma.Decimal("500") },
+        ]),
+      },
+    } as any;
+    const buffer = await new SalaryService(prisma, periods).exportImportTemplate();
+    expect(buffer.byteLength).toBeGreaterThan(100);
+  });
+
+  it("generates a balanced salary disbursement voucher for net pay and withheld IIT", async () => {
+    let createdVoucher: any;
+    const mockTx = {
+      accountingPeriod: { findUnique: vi.fn().mockResolvedValue({ id: 5, year: 2026, month: 7, periodCode: "2026-07", endDate: new Date("2026-07-31") }) },
+      accountingEvent: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn() },
+      salary: {
+        findMany: vi.fn().mockResolvedValue([
+          { netAmount: new Prisma.Decimal("8500"), individualIncomeTax: new Prisma.Decimal("200") },
+        ]),
+      },
+      account: { findMany: vi.fn().mockResolvedValue([{ id: 2211 }, { id: 1002 }, { id: 222116 }]) },
+      $executeRaw: vi.fn(),
+      $queryRaw: vi.fn().mockResolvedValue([{ next_value: 1 }]),
+      voucherSequence: { update: vi.fn() },
+      voucher: { create: vi.fn().mockImplementation(({ data }) => { createdVoucher = { id: 77, ...data }; return createdVoucher; }) },
+      auditLog: { create: vi.fn() },
+    };
+    const prisma = { $transaction: vi.fn(async (fn) => fn(mockTx)) } as any;
+    const payPeriods = { resolveOpenPeriod: vi.fn().mockResolvedValue({ id: 5 }), assertVoucherOperation: vi.fn() } as any;
+
+    const voucher = await new SalaryService(prisma, payPeriods).pay(
+      5,
+      { payableAccountId: 2211, bankAccountId: 1002, taxPayableAccountId: 222116, paymentDate: "2026-07-31" },
+      { actorId: 1, role: "ADMIN" },
+    );
+    expect(voucher.totalDebit.toString()).toBe("8700");
+    expect(createdVoucher.entries.create).toHaveLength(3);
+    expect(createdVoucher.entries.create[0]).toMatchObject({ accountId: 2211, debitAmount: new Prisma.Decimal("8700") });
+    expect(createdVoucher.entries.create[1]).toMatchObject({ accountId: 1002, creditAmount: new Prisma.Decimal("8500") });
+    expect(createdVoucher.entries.create[2]).toMatchObject({ accountId: 222116, creditAmount: new Prisma.Decimal("200") });
+  });
 });
 

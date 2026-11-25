@@ -100,6 +100,147 @@ export class SalaryService {
     return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
+  async exportImportTemplate() {
+    const employees = await this.prisma.employee.findMany({ where: { deletedAt: null, status: EMPLOYEE_STATUS.ACTIVE }, orderBy: { employeeNo: "asc" } });
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("工资导入模板");
+    sheet.columns = [
+      { header: "员工编号", key: "employeeNo", width: 14 },
+      { header: "姓名", key: "name", width: 14 },
+      { header: "基本工资", key: "baseSalary", width: 14 },
+      { header: "奖金", key: "bonus", width: 12 },
+      { header: "补贴", key: "allowance", width: 12 },
+      { header: "扣款", key: "deduction", width: 12 },
+      { header: "社保", key: "socialInsurance", width: 12 },
+      { header: "公积金", key: "housingFund", width: 12 },
+      { header: "个税", key: "individualIncomeTax", width: 14 },
+    ];
+    sheet.getRow(1).font = { bold: true };
+    if (employees.length) {
+      for (const emp of employees) {
+        sheet.addRow({
+          employeeNo: emp.employeeNo,
+          name: emp.name,
+          baseSalary: Number(emp.baseSalary),
+          bonus: 0,
+          allowance: 0,
+          deduction: 0,
+          socialInsurance: Number(emp.socialInsurance),
+          housingFund: Number(emp.housingFund),
+          individualIncomeTax: "",
+        });
+      }
+    } else {
+      sheet.addRow({
+        employeeNo: "EMP001",
+        name: "示例员工",
+        baseSalary: 8000,
+        bonus: 0,
+        allowance: 500,
+        deduction: 0,
+        socialInsurance: 800,
+        housingFund: 500,
+        individualIncomeTax: "",
+      });
+    }
+    const help = workbook.addWorksheet("填写说明");
+    help.columns = [{ width: 70 }];
+    help.addRow(["【工资导入填写说明】"]);
+    help.addRow(["1. 「员工编号」必须与系统员工档案中的编号完全一致。"]);
+    help.addRow(["2. 「个税」列若留空，系统将按税法累计预扣法自动计算；若手动填写，则按填写金额导入。"]);
+    return Buffer.from(await workbook.xlsx.writeBuffer());
+  }
+
+  async pay(
+    periodId: number,
+    input: { payableAccountId: number; bankAccountId: number; taxPayableAccountId?: number | undefined; paymentDate?: string | undefined },
+    actor: SalaryActor,
+  ) {
+    if (!["ADMIN", "FINANCE_MANAGER", "CASHIER"].includes(actor.role)) {
+      throw new AppError("FORBIDDEN", "仅出纳、财务主管或管理员可以发放工资并生成付款凭证", 403);
+    }
+    const paymentDate = input.paymentDate ? this.date(input.paymentDate) : null;
+    if (paymentDate) await this.periods.resolveOpenPeriod(paymentDate);
+    else await this.periods.assertVoucherOperation(periodId);
+
+    return this.prisma.$transaction(async (tx) => {
+      const period = await tx.accountingPeriod.findUnique({ where: { id: periodId } });
+      if (!period) throw new AppError("ACCOUNTING_PERIOD_NOT_FOUND", "会计期间不存在", 404);
+
+      const existingEvents = await tx.accountingEvent.findMany({
+        where: { eventType: "SALARY_PAYMENT", sourceType: "AccountingPeriod", sourceId: periodId, deletedAt: null },
+        include: { voucher: { select: { id: true, status: true, voucherNo: true } } },
+      });
+      const activeEvent = existingEvents.find((ev) => ev.voucher?.status !== VOUCHER_STATUS.VOID);
+      if (activeEvent) {
+        throw new AppError("SALARY_ALREADY_PAID", `本期间已生成工资发放凭证（${activeEvent.voucher?.voucherNo ?? ""}），如需重发请先作废原凭证`, 409);
+      }
+
+      const salaries = await tx.salary.findMany({
+        where: { periodId, deletedAt: null, status: VOUCHER_STATUS.POSTED },
+      });
+      if (!salaries.length) throw new AppError("SALARY_NOT_FOUND", "该期间暂无已计提记账的工资单", 409);
+
+      const totalNet = salaries.reduce((sum, s) => sum.plus(s.netAmount), ZERO);
+      const totalTax = input.taxPayableAccountId ? salaries.reduce((sum, s) => sum.plus(s.individualIncomeTax), ZERO) : ZERO;
+      const totalDebit = totalNet.plus(totalTax);
+      if (totalDebit.lessThanOrEqualTo(ZERO)) throw new AppError("INVALID_SALARY_AMOUNT", "实发工资总额必须大于零", 400);
+
+      const accountIds = [input.payableAccountId, input.bankAccountId, ...(input.taxPayableAccountId ? [input.taxPayableAccountId] : [])];
+      if (new Set(accountIds).size !== accountIds.length) {
+        throw new AppError("INVALID_SALARY_ACCOUNTS", "应付工资、付款银行和代扣个税科目不能相同", 400);
+      }
+      const validAccounts = await tx.account.findMany({
+        where: { id: { in: accountIds }, deletedAt: null, isEnabled: true, isLeaf: true },
+        select: { id: true },
+      });
+      if (validAccounts.length !== accountIds.length) {
+        throw new AppError("ACCOUNT_NOT_POSTABLE", "所选会计科目不存在、未启用或不是末级科目", 400);
+      }
+
+      const voucherDate = paymentDate ?? period.endDate;
+      const summary = `发放${period.periodCode}员工工资`;
+      const entries: Array<{ lineNo: number; accountId: number; summary: string; debitAmount: Prisma.Decimal; creditAmount: Prisma.Decimal }> = [
+        { lineNo: 1, accountId: input.payableAccountId, summary, debitAmount: totalDebit, creditAmount: ZERO },
+      ];
+      if (totalNet.greaterThan(ZERO)) {
+        entries.push({ lineNo: entries.length + 1, accountId: input.bankAccountId, summary: `${summary}(实发)`, debitAmount: ZERO, creditAmount: totalNet });
+      }
+      if (input.taxPayableAccountId && totalTax.greaterThan(ZERO)) {
+        entries.push({ lineNo: entries.length + 1, accountId: input.taxPayableAccountId, summary: `结转${period.periodCode}代扣员工个税`, debitAmount: ZERO, creditAmount: totalTax });
+      }
+
+      const sequence = await getNextVoucherNumber(tx, period.year);
+      const voucher = await tx.voucher.create({
+        data: {
+          ...sequence,
+          fiscalYear: period.year,
+          fiscalPeriod: period.month,
+          voucherDate,
+          postingDate: voucherDate,
+          periodId: period.id,
+          summary,
+          sourceType: "MANUAL",
+          category: "PAYMENT",
+          status: VOUCHER_STATUS.POSTED,
+          totalDebit,
+          totalCredit: totalDebit,
+          createdById: actor.actorId,
+          reviewerId: actor.actorId,
+          reviewedAt: new Date(),
+          postedById: actor.actorId,
+          postedAt: new Date(),
+          entries: { create: entries },
+        },
+      });
+      await tx.accountingEvent.create({
+        data: { eventType: "SALARY_PAYMENT", sourceType: "AccountingPeriod", sourceId: periodId, voucherId: voucher.id, description: summary, createdById: actor.actorId },
+      });
+      await this.audit(tx, actor.actorId, "CREATE", "SalaryPayment", periodId, { voucherId: voucher.id, voucherNo: voucher.voucherNo, totalNet: totalNet.toString(), totalTax: totalTax.toString() });
+      return voucher;
+    });
+  }
+
   async importWorkbook(periodId: number, data: Buffer, accounts: SalaryAccounts, actor: SalaryActor) {
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(data as unknown as ExcelJS.Buffer); const sheet = workbook.worksheets[0]; if (!sheet) throw new AppError("EMPTY_SALARY_FILE", "工资导入文件没有工作表", 400);
     const headers = new Map<string, number>(); sheet.getRow(1).eachCell((cell, column) => headers.set(String(cell.text).trim(), column)); const column = (name: string) => headers.get(name);

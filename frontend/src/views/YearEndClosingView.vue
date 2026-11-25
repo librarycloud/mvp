@@ -25,16 +25,22 @@ const year = ref(String(new Date().getFullYear()));
 const preview = ref<any>();
 const accounts = ref<any[]>([]);
 const profitAccountId = ref<number | "">("");
+const retainedEarningsAccountId = ref<number | "">("");
 const result = ref<any>();
 const annualLoading = ref(false);
 
 async function loadAccounts() {
   if (!accounts.value.length) {
-    accounts.value = await api.get<any[]>("/accounts");
+    const list = await api.get<any[]>("/accounts?tree=false&isEnabled=true");
+    accounts.value = list.filter((a: any) => a.isLeaf);
     const defaultProfit = accounts.value.find((a: any) => a.code === "4103" || a.name?.includes("本年利润"));
     if (defaultProfit) {
       if (!profitAccountId.value) profitAccountId.value = defaultProfit.id;
       if (!monthlyProfitAccountId.value) monthlyProfitAccountId.value = defaultProfit.id;
+    }
+    const defaultRetained = accounts.value.find((a: any) => a.code === "4104" || a.code?.startsWith("4104") || a.name?.includes("利润分配"));
+    if (defaultRetained && !retainedEarningsAccountId.value) {
+      retainedEarningsAccountId.value = defaultRetained.id;
     }
   }
 }
@@ -84,7 +90,10 @@ async function loadPreview() {
 async function closeAnnual() {
   annualLoading.value = true;
   try {
-    result.value = await api.post(`/year-end-closings/${year.value}`, { profitAccountId: profitAccountId.value });
+    result.value = await api.post(`/year-end-closings/${year.value}`, {
+      profitAccountId: profitAccountId.value,
+      ...(retainedEarningsAccountId.value ? { retainedEarningsAccountId: retainedEarningsAccountId.value } : {}),
+    });
     ElMessage.success("年度结转完成");
   } finally {
     annualLoading.value = false;
@@ -304,24 +313,42 @@ onMounted(async () => {
         <!-- Tab 2: Annual Closing -->
         <el-tab-pane label="年末利润结转" name="annual">
           <div v-loading="annualLoading">
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 16px;"
+              title="年末结转支持将全年未结转损益转入「4103 本年利润」，并将「4103 本年利润」年度累计余额正式结转至「4104 利润分配（未分配利润）」。"
+            />
             <div class="toolbar" style="margin-bottom: 16px;">
-              <el-input v-model="year" placeholder="年度" style="width: 120px;" />
-              <el-select v-model="profitAccountId" filterable placeholder="本年利润科目" style="width: 240px;">
+              <el-input v-model="year" placeholder="年度" style="width: 110px;" />
+              <el-select v-model="profitAccountId" filterable placeholder="本年利润科目 (4103)" style="width: 220px;">
+                <el-option v-for="a in accounts" :key="a.id" :label="`${a.code} ${a.name}`" :value="a.id" />
+              </el-select>
+              <el-select v-model="retainedEarningsAccountId" filterable clearable placeholder="未分配利润科目 (4104，可选)" style="width: 240px;">
                 <el-option v-for="a in accounts" :key="a.id" :label="`${a.code} ${a.name}`" :value="a.id" />
               </el-select>
               <el-button @click="loadPreview">试运行预览</el-button>
-              <el-button type="primary" :disabled="!preview || !profitAccountId" @click="closeAnnual">正式结转</el-button>
+              <el-button
+                type="primary"
+                :disabled="!preview || !profitAccountId || (!preview.lines?.length && (!retainedEarningsAccountId || Number(preview.totalTransferToRetained ?? 0) === 0))"
+                @click="closeAnnual"
+              >正式结转</el-button>
               <el-button v-if="result" type="danger" @click="cancelAnnual">撤销结转</el-button>
             </div>
 
             <el-card v-if="preview" shadow="never" style="margin-top: 16px;">
-              <el-descriptions :column="4" border style="margin-bottom: 16px;">
-                <el-descriptions-item label="收入">{{ preview.revenueAmount }}</el-descriptions-item>
-                <el-descriptions-item label="成本">{{ preview.costAmount }}</el-descriptions-item>
-                <el-descriptions-item label="费用">{{ preview.expenseAmount }}</el-descriptions-item>
-                <el-descriptions-item label="本年利润">{{ preview.netProfit }}</el-descriptions-item>
+              <el-descriptions :column="3" border style="margin-bottom: 16px;">
+                <el-descriptions-item label="未月结收入">{{ preview.revenueAmount }}</el-descriptions-item>
+                <el-descriptions-item label="未月结成本">{{ preview.costAmount }}</el-descriptions-item>
+                <el-descriptions-item label="未月结费用">{{ preview.expenseAmount }}</el-descriptions-item>
+                <el-descriptions-item label="未月结损益">{{ preview.netProfit }}</el-descriptions-item>
+                <el-descriptions-item label="已月结本年利润 (4103)">{{ preview.alreadyClosedMonthlyProfit ?? "0" }}</el-descriptions-item>
+                <el-descriptions-item label="应转入未分配利润合计">
+                  <strong>{{ preview.totalTransferToRetained ?? preview.netProfit }}</strong>
+                </el-descriptions-item>
               </el-descriptions>
-              <el-table table-layout="auto" :data="preview.lines" stripe>
+              <el-table table-layout="auto" :data="preview.lines" stripe empty-text="各损益科目已通过月度结转清零，可直接执行本年利润转入未分配利润">
                 <el-table-column prop="code" label="科目编码" />
                 <el-table-column prop="name" label="科目名称" />
                 <el-table-column prop="kind" label="类型" />

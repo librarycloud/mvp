@@ -168,5 +168,55 @@ describe("InvoiceService", () => {
     const voucher = await service.generateVoucher(1, {}, { actorId: 1, role: "ACCOUNTANT" });
     expect(voucher).toEqual(createdVoucher);
   });
+
+  it("automatically generates a sale voucher using 22210107 output VAT account", async () => {
+    const createdVoucher = { id: 101, voucherNo: "2026-000002" };
+    const tx = {
+      $executeRaw: async () => 1,
+      $queryRaw: async () => [{ next_value: 2 }],
+      accountingPeriod: {
+        findFirst: async () => ({ id: 7, year: 2026, month: 7 }),
+      },
+      voucherSequence: { update: async () => {} },
+      invoice: {
+        findFirst: async () => ({
+          id: 2,
+          direction: "SALE",
+          invoiceNumber: "SALE-001",
+          buyerName: "客户甲公司",
+          totalAmountWithoutTax: new Prisma.Decimal("1000"),
+          totalTaxAmount: new Prisma.Decimal("60"),
+          totalTaxIncludedAmount: new Prisma.Decimal("1060"),
+          issueDate: new Date("2026-07-20"),
+          voucherId: null,
+        }),
+        update: async () => {},
+      },
+      account: {
+        findFirst: async ({ where }: any) => {
+          const prefix = typeof where.code === "object" ? where.code?.startsWith : where.code;
+          if (prefix === "1122") return { id: 1122, code: "1122", name: "应收账款" };
+          if (prefix === "6001") return { id: 6001, code: "6001", name: "主营业务收入" };
+          if (prefix === "22210107") return { id: 22107, code: "22210107", name: "销项税额" };
+          if (prefix === "22210102") return { id: 22102, code: "22210102", name: "销项税额抵减" };
+          return null;
+        },
+      },
+      voucher: {
+        create: async ({ data }: any) => {
+          expect(data.totalDebit.toString()).toBe("1060");
+          expect(data.entries.create[2].accountId).toBe(22107);
+          return createdVoucher;
+        },
+      },
+      voucherSource: { create: async () => {} },
+      accountingEvent: { create: async () => {} },
+    };
+    const prisma = { $transaction: async (work: any) => work(tx) } as any;
+    const service = new InvoiceService(new FakeInvoiceRepository(), new XmlInvoiceParser(), new MemoryFileStorage(), undefined, prisma);
+
+    const voucher = await service.generateVoucher(2, {}, { actorId: 1, role: "ACCOUNTANT" });
+    expect(voucher).toEqual(createdVoucher);
+  });
 });
 

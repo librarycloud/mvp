@@ -2,13 +2,16 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { sendSuccess } from "../../common/http/response.js";
 import type { AccountingPeriodService } from "./accounting-period.service.js";
 import type { AccountingPeriodActor } from "./accounting-period.types.js";
-import type { AccountingPeriodCreateBody, AccountingPeriodParams, AccountingPeriodQuery, AccountingPeriodUpdateBody } from "./dto/accounting-period.dto.js";
+import type { AccountingPeriodBatchCreateBody, AccountingPeriodCreateBody, AccountingPeriodParams, AccountingPeriodQuery, AccountingPeriodUpdateBody } from "./dto/accounting-period.dto.js";
 
 export class AccountingPeriodController {
   constructor(private readonly service: AccountingPeriodService) {}
 
   create = async (request: FastifyRequest<{ Body: AccountingPeriodCreateBody }>, reply: FastifyReply) =>
     sendSuccess(reply, await this.service.create(request.body.year, request.body.month, this.actor(request)), "会计期间创建成功", 201);
+
+  createYear = async (request: FastifyRequest<{ Body: AccountingPeriodBatchCreateBody }>, reply: FastifyReply) =>
+    sendSuccess(reply, await this.service.createYear(request.body.year, this.actor(request)), "年度会计期间批量生成完成", 201);
 
   update = async (request: FastifyRequest<{ Params: AccountingPeriodParams; Body: AccountingPeriodUpdateBody }>, reply: FastifyReply) =>
     sendSuccess(reply, await this.service.update(request.params.id, request.body, this.actor(request)), "会计期间修改成功");

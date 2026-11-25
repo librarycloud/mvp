@@ -16,6 +16,7 @@ const periodLabels: Record<number, string> = { 0: "\u6253\u5f00", 1: "\u5df2\u51
 const router = useRouter();
 const auth = useAuthStore();
 const rows = ref<Period[]>([]); const loading = ref(false); const visible = ref(false);
+const batchVisible = ref(false); const batchYear = ref(new Date().getFullYear() + 1); const batchLoading = ref(false);
 const checklistVisible = ref(false); const checklist = ref<any>({ ready: false, checks: [] }); const checklistPeriod = ref<Period>();
 const form = reactive({ year: new Date().getFullYear(), month: new Date().getMonth() + 1 });
 const editVisible = ref(false); const editingId = ref<number | "">("");
@@ -38,6 +39,18 @@ const suiteStatus = ref<{
 
 async function load() { loading.value = true; try { rows.value = await api.get<Period[]>('/accounting-periods'); } finally { loading.value = false; } }
 async function create() { await api.post('/accounting-periods', form); visible.value = false; ElMessage.success('会计期间已创建'); await load(); }
+async function batchCreateYear() {
+  if (batchLoading.value) return;
+  batchLoading.value = true;
+  try {
+    const res = await api.post<{ createdCount: number; skippedCount: number }>('/accounting-periods/batch', { year: batchYear.value });
+    batchVisible.value = false;
+    ElMessage.success(`已为 ${batchYear.value} 年生成 ${res.createdCount} 个会计期间（跳过 ${res.skippedCount} 个已存在期间）`);
+    await load();
+  } finally {
+    batchLoading.value = false;
+  }
+}
 function openEdit(row: Period) {
   editingId.value = row.id;
   Object.assign(editForm, { year: row.year, month: row.month, startDate: date(row.startDate), endDate: date(row.endDate) });
@@ -79,7 +92,8 @@ async function openClosingSuite(period: Period) {
   await loadSuiteStatus();
   if (!accounts.value.length) {
     try {
-      accounts.value = await api.get<any[]>("/accounts");
+      const list = await api.get<any[]>("/accounts?tree=false&isEnabled=true");
+      accounts.value = list.filter((a: any) => a.isLeaf);
       const defaultProfit = accounts.value.find((a: any) => a.code === '4103' || a.name?.includes('本年利润'));
       if (defaultProfit) {
         suiteProfitAccountId.value = defaultProfit.id;
@@ -156,7 +170,10 @@ onMounted(load);
   <div class="page-grid">
     <section class="page-heading">
       <div><h2>会计期间</h2><p>维护月度期间并执行月末关账控制。</p></div>
-      <div v-if="isAdmin" class="toolbar"><el-button type="primary" @click="visible = true">创建期间</el-button></div>
+      <div v-if="isAdmin" class="toolbar">
+        <el-button @click="batchVisible = true">批量生成全年</el-button>
+        <el-button type="primary" @click="visible = true">创建期间</el-button>
+      </div>
     </section>
     <el-card shadow="never">
       <el-table table-layout="auto" v-loading="loading" :data="rows" stripe>
@@ -172,6 +189,16 @@ onMounted(load);
     <el-dialog v-model="visible" title="创建会计期间" width="360px">
       <el-form label-width="70px"><el-form-item label="年度"><el-input-number v-model="form.year" :min="2000" :max="9999" /></el-form-item><el-form-item label="月份"><el-select v-model="form.month"><el-option v-for="n in 12" :key="n" :value="n" :label="`${n}月`" /></el-select></el-form-item></el-form>
       <template #footer><el-button @click="visible = false">取消</el-button><el-button type="primary" @click="create">创建</el-button></template>
+    </el-dialog>
+    <el-dialog v-model="batchVisible" title="批量生成全年会计期间" width="400px">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 14px" title="一次性生成指定年度 1 月至 12 月共 12 个会计期间，已存在的月份将自动跳过。" />
+      <el-form label-width="90px">
+        <el-form-item label="目标年度"><el-input-number v-model="batchYear" :min="2000" :max="9999" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="batchVisible = false">取消</el-button>
+        <el-button type="primary" :loading="batchLoading" :disabled="batchLoading" @click="batchCreateYear">一键生成 12 个期间</el-button>
+      </template>
     </el-dialog>
     <el-dialog v-model="editVisible" title="修改会计期间" width="460px">
       <el-form label-width="90px">

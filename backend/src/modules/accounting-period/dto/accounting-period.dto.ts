@@ -4,6 +4,9 @@ export const AccountingPeriodCreateBodySchema = Type.Object({
   year: Type.Integer({ minimum: 2000, maximum: 9999 }),
   month: Type.Integer({ minimum: 1, maximum: 12 }),
 }, { additionalProperties: false });
+export const AccountingPeriodBatchCreateBodySchema = Type.Object({
+  year: Type.Integer({ minimum: 2000, maximum: 9999 }),
+}, { additionalProperties: false });
 export const AccountingPeriodParamsSchema = Type.Object({ id: Type.Integer({ minimum: 1 }) });
 export const AccountingPeriodQuerySchema = Type.Object({
   year: Type.Optional(Type.Integer({ minimum: 2000, maximum: 9999 })),
@@ -30,6 +33,7 @@ export const AccountingPeriodUpdateBodySchema = Type.Object({
 }, { additionalProperties: false });
 
 export type AccountingPeriodCreateBody = Static<typeof AccountingPeriodCreateBodySchema>;
+export type AccountingPeriodBatchCreateBody = Static<typeof AccountingPeriodBatchCreateBodySchema>;
 export type AccountingPeriodUpdateBody = Static<typeof AccountingPeriodUpdateBodySchema>;
 export type AccountingPeriodParams = Static<typeof AccountingPeriodParamsSchema>;
 export type AccountingPeriodQuery = Static<typeof AccountingPeriodQuerySchema>;

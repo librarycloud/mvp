@@ -234,6 +234,7 @@ export class BankTransactionService {
     counterAccountId: number,
     summary?: string,
     actor?: { actorId: number; role: string },
+    bankAccountId?: number,
   ) {
     if (!actor?.actorId) {
       throw new AppError("FORBIDDEN", "生成凭证需要有效的操作人身份，请重新登录", 403);
@@ -262,11 +263,21 @@ export class BankTransactionService {
       });
       if (!counterAccount) throw new AppError("ACCOUNT_NOT_FOUND", "对方会计科目不存在、未启用或不是末级科目", 400);
 
-      const bankAccount = await tx.account.findFirst({
-        where: { code: { startsWith: "1002" }, deletedAt: null, isEnabled: true, isLeaf: true },
-        orderBy: { code: "asc" },
-      });
-      if (!bankAccount) throw new AppError("ACCOUNT_NOT_FOUND", "未找到适用的银行存款科目", 400);
+      const bankAccount = bankAccountId
+        ? await tx.account.findFirst({
+            where: {
+              id: bankAccountId,
+              deletedAt: null,
+              isEnabled: true,
+              isLeaf: true,
+              OR: [{ code: { startsWith: "1001" } }, { code: { startsWith: "1002" } }, { code: { startsWith: "1012" } }],
+            },
+          })
+        : await tx.account.findFirst({
+            where: { code: { startsWith: "1002" }, deletedAt: null, isEnabled: true, isLeaf: true },
+            orderBy: { code: "asc" },
+          });
+      if (!bankAccount) throw new AppError("ACCOUNT_NOT_FOUND", "未找到适用的银行存款或资金科目", 400);
 
       const amount = new Prisma.Decimal(transaction.amount);
       const absAmount = amount.abs();

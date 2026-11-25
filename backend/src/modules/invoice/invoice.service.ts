@@ -404,7 +404,7 @@ export class InvoiceService {
           ?? (await findAccount(undefined, "6051", "其他业务收入"));
         if (!revAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未找到适用的营业收入科目", 400);
 
-        const taxAcc = (await findAccount(undefined, "22210102", "销项税额"))
+        const taxAcc = (await findAccount(undefined, "22210107", "销项税额"))
           ?? (await findAccount(undefined, "2221", "应交增值税"));
         if (!taxAcc) throw new AppError("ACCOUNT_NOT_FOUND", "未找到应交增值税-销项税额科目", 400);
 

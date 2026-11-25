@@ -99,4 +99,12 @@ describe("AccountingPeriodService", () => {
     await service.close(period1.id, admin);
     await expect(service.close(period2.id, admin)).resolves.toMatchObject({ status: 1 });
   });
+
+  it("batch creates all 12 calendar months for a year and skips existing months", async () => {
+    const service = new AccountingPeriodService(new FakeAccountingPeriodRepository());
+    await service.create(2027, 1, admin);
+    const result = await service.createYear(2027, admin);
+    expect(result).toMatchObject({ year: 2027, createdCount: 11, skippedCount: 1 });
+    expect(result.periods).toHaveLength(11);
+  });
 });

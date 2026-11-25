@@ -275,7 +275,7 @@ const generateForm = ref({
 
 async function ensureAccounts() {
   if (!allAccounts.value.length) {
-    allAccounts.value = await api.get<any[]>("/accounts?isEnabled=true").catch(() => []);
+    allAccounts.value = await api.get<any[]>("/accounts?tree=false&isEnabled=true").catch(() => []);
   }
 }
 

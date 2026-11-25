@@ -84,7 +84,7 @@ export class BankTransactionController {
   ) => sendSuccess(reply, await this.service.linkVoucher(request.params.id, request.body.voucherId, Number(request.user.sub)));
 
   generateVoucher = async (
-    request: FastifyRequest<{ Params: BankTransactionParams; Body: { counterAccountId: number; summary?: string } }>,
+    request: FastifyRequest<{ Params: BankTransactionParams; Body: { counterAccountId: number; bankAccountId?: number; summary?: string } }>,
     reply: FastifyReply,
   ) =>
     sendSuccess(
@@ -94,6 +94,7 @@ export class BankTransactionController {
         request.body.counterAccountId,
         request.body.summary,
         { actorId: Number(request.user.sub), role: request.user.role },
+        request.body.bankAccountId,
       ),
       "记账凭证已自动生成",
       201,

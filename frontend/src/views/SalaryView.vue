@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../utils/api";
 import { useClientPagination } from "../composables/useClientPagination";
+import { todayBusinessDate } from "../utils/date";
 const EMPLOYEE_STATUS = { ACTIVE: 0, INACTIVE: 1 } as const;
 const employeeStatusLabels: Record<number, string> = {
   0: "\u5728\u804c",
@@ -17,10 +18,18 @@ const periods = ref<any[]>([]),
   periodId = ref<number | "">(""),
   loading = ref(false),
   generating = ref(false),
+  paying = ref(false),
+  payDialog = ref(false),
   employeeDialog = ref(false),
   itemDialog = ref(false),
   employeeId = ref<number | "">(""),
   itemId = ref<number | "">("");
+const payForm = ref({
+  payableAccountId: "" as number | "",
+  bankAccountId: "" as number | "",
+  taxPayableAccountId: "" as number | "",
+  paymentDate: todayBusinessDate(),
+});
 const {
   page,
   pageSize,
@@ -62,13 +71,23 @@ async function load() {
 async function support() {
   loading.value = true;
   try {
-    [periods.value, employees.value, items.value, accounts.value] =
+    const [periodList, empList, itemList, rawAccounts] =
       await Promise.all([
         api.get<any[]>("/accounting-periods"),
         api.get<any[]>("/salaries/employees"),
         api.get<any[]>("/salaries/items"),
-        api.get<any[]>("/accounts?tree=false"),
+        api.get<any[]>("/accounts?tree=false&isEnabled=true"),
       ]);
+    periods.value = periodList;
+    employees.value = empList;
+    items.value = itemList;
+    accounts.value = rawAccounts.filter((a: any) => a.isLeaf);
+    if (!accountForm.value.expenseAccountId) {
+      accountForm.value.expenseAccountId = accounts.value.find((a: any) => a.code === "6602" || a.code.startsWith("6602"))?.id ?? "";
+    }
+    if (!accountForm.value.payableAccountId) {
+      accountForm.value.payableAccountId = accounts.value.find((a: any) => a.code === "2211" || a.code.startsWith("2211"))?.id ?? "";
+    }
     if (!periodId.value && periods.value[0]) {
       periodId.value = periods.value[0].id;
       await load();
@@ -78,6 +97,9 @@ async function support() {
   }
 }
 async function generate() {
+  if (!periodId.value || !accountForm.value.expenseAccountId || !accountForm.value.payableAccountId) {
+    return ElMessage.warning("请先选择会计期间、工资费用科目和应付工资科目");
+  }
   try {
     await ElMessageBox.confirm(
       "确认要为当前期间生成全体员工工资吗？此操作将创建工资单并过账凭证。",
@@ -146,14 +168,56 @@ async function saveItem() {
   await support();
 }
 async function importFile(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
   if (!file) return;
+  if (!periodId.value || !accountForm.value.expenseAccountId || !accountForm.value.payableAccountId) {
+    return ElMessage.warning("请先选择会计期间、工资费用科目和应付工资科目再导入");
+  }
   await api.uploadWithFields(
     "/salaries/" + periodId.value + "/import",
     file,
     accountForm.value,
   );
+  ElMessage.success("工资数据导入并生成凭证成功");
   await load();
+}
+function downloadImportTemplate() {
+  return api.download("/salaries/import-template", "工资批量导入模板.xlsx");
+}
+function openPayDialog() {
+  if (!periodId.value) return ElMessage.warning("请先选择会计期间");
+  const defaultPayable = accountForm.value.payableAccountId || accounts.value.find((a: any) => a.code === "2211" || a.code.startsWith("2211"))?.id || "";
+  const defaultBank = accounts.value.find((a: any) => a.code === "1002" || a.code.startsWith("1002"))?.id || "";
+  const defaultTaxPayable = accounts.value.find((a: any) => a.code === "222116")?.id || "";
+  payForm.value = {
+    payableAccountId: defaultPayable,
+    bankAccountId: defaultBank,
+    taxPayableAccountId: defaultTaxPayable,
+    paymentDate: todayBusinessDate(),
+  };
+  payDialog.value = true;
+}
+async function submitPay() {
+  if (paying.value) return;
+  if (!payForm.value.payableAccountId || !payForm.value.bankAccountId) {
+    return ElMessage.warning("请选择应付工资科目和付款银行科目");
+  }
+  paying.value = true;
+  try {
+    const res = await api.post<any>(`/salaries/${periodId.value}/pay`, {
+      payableAccountId: Number(payForm.value.payableAccountId),
+      bankAccountId: Number(payForm.value.bankAccountId),
+      ...(payForm.value.taxPayableAccountId ? { taxPayableAccountId: Number(payForm.value.taxPayableAccountId) } : {}),
+      ...(payForm.value.paymentDate ? { paymentDate: payForm.value.paymentDate } : {}),
+    });
+    payDialog.value = false;
+    ElMessage.success(`工资发放凭证【${res.voucherNo}】已生成并入账`);
+    await load();
+  } finally {
+    paying.value = false;
+  }
 }
 function exportFile() {
   return api.download(
@@ -229,7 +293,13 @@ onMounted(support);
           :disabled="generating"
           @click="generate"
           >生成工资</el-button
-        ><label class="el-button"
+        ><el-button
+          type="success"
+          plain
+          :disabled="!salaries.length"
+          @click="openPayDialog"
+          >发放工资</el-button
+        ><el-button @click="downloadImportTemplate">下载模板</el-button><label class="el-button"
           ><input type="file" accept=".xlsx" hidden @change="importFile" />导入
           Excel</label
         ><el-button @click="exportFile">导出 Excel</el-button>
@@ -398,4 +468,37 @@ onMounted(support);
       ><el-button type="primary" @click="saveItem">保存</el-button></template
     ></el-dialog
   >
+  <el-dialog v-model="payDialog" title="发放员工工资并生成付款凭证" width="520px">
+    <el-alert
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 14px"
+      :title="`当前期间实发合计 ¥${Number(summary.netAmount ?? 0).toFixed(2)}，代扣个税合计 ¥${Number(summary.individualIncomeTax ?? 0).toFixed(2)}`"
+    />
+    <el-form label-width="120px">
+      <el-form-item label="发放日期" required>
+        <el-date-picker v-model="payForm.paymentDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+      </el-form-item>
+      <el-form-item label="应付工资科目" required>
+        <el-select v-model="payForm.payableAccountId" filterable style="width: 100%">
+          <el-option v-for="a in accounts" :key="a.id" :label="`${a.code} ${a.name}`" :value="a.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="付款银行科目" required>
+        <el-select v-model="payForm.bankAccountId" filterable style="width: 100%">
+          <el-option v-for="a in accounts.filter(acc => acc.code.startsWith('1001') || acc.code.startsWith('1002'))" :key="a.id" :label="`${a.code} ${a.name}`" :value="a.id" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="代扣个税科目">
+        <el-select v-model="payForm.taxPayableAccountId" filterable clearable placeholder="可选：222116 应交个人所得税" style="width: 100%">
+          <el-option v-for="a in accounts.filter(acc => acc.code.startsWith('2221'))" :key="a.id" :label="`${a.code} ${a.name}`" :value="a.id" />
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="payDialog = false">取消</el-button>
+      <el-button type="primary" :loading="paying" :disabled="paying" @click="submitPay">确认发放并记账</el-button>
+    </template>
+  </el-dialog>
 </template>
